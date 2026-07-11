@@ -11,9 +11,15 @@ on:
     tags: ['v*']
     branches: ['nang-cap-thuong-mai']
 
+env:
+  # Runner Windows mặc định dùng cp1252 — ép Python in UTF-8 vì build.py có thông báo tiếng Việt
+  PYTHONUTF8: "1"
+
 jobs:
   build:
     strategy:
+      # Một hệ điều hành lỗi không hủy job của hệ điều hành còn lại
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -28,11 +34,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+
+      # Đảm bảo lệnh "python" có mặt trên cả Windows lẫn Linux
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       # Ghép bản web mới nhất từ src/ (đảm bảo desktop đóng gói đúng code hiện tại)
       - name: Build web app tu src
-        run: python3 build.py
+        run: python build.py
 
       - name: Kiem thu engine
         run: node test_engine.js
