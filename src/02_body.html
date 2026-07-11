@@ -1,0 +1,56 @@
+<body>
+
+<!-- ==================== LOGIN ==================== -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">📦</div>
+    <h1>QUẢN LÝ KHO</h1>
+    <p class="login-sub" id="login-company">Phần mềm quản lý kho nội bộ</p>
+    <div class="field"><label>Tên đăng nhập</label><input id="login-user" autocomplete="username" placeholder="admin"></div>
+    <div class="field"><label>Mật khẩu</label><input type="password" id="login-pass" autocomplete="current-password" placeholder="••••••••"></div>
+    <div id="login-err" class="login-err hidden"></div>
+    <button class="btn btn-primary btn-block" style="padding:11px" onclick="doLogin()">Đăng nhập</button>
+    <div class="login-demo hidden" id="login-demo">
+      Tài khoản mặc định: <b>admin / admin123</b><br>
+      <span class="muted">Dùng thử: quanly / quanly123 &nbsp;·&nbsp; nhanvien / nhanvien123</span>
+    </div>
+    <div id="login-storage-warn" class="login-warn hidden">⚠️ Trình duyệt đang chặn bộ nhớ cục bộ nên dữ liệu chỉ giữ tạm trong phiên này. Hãy <b>tải file HTML về máy và mở trực tiếp</b> để dữ liệu được lưu lâu dài.</div>
+  </div>
+  <div class="login-foot">Hoạt động ngoại tuyến — dữ liệu lưu ngay trên máy của bạn</div>
+</div>
+
+<!-- ==================== APP ==================== -->
+<div id="app" class="hidden">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="logo">📦</div>
+      <div><b>QUẢN LÝ KHO</b><span id="brand-company">Nội bộ</span></div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">Kho App v1.0</div>
+  </aside>
+  <div id="main">
+    <header id="topbar">
+      <div id="page-title">Bảng điều khiển</div>
+      <div class="top-right">
+        <span id="storage-warn" class="hidden" title="Trình duyệt đang chặn bộ nhớ cục bộ — dữ liệu chỉ giữ tạm trong phiên này. Hãy tải file về máy và mở trực tiếp, đồng thời dùng chức năng Sao lưu thường xuyên.">⚠️ Lưu tạm</span>
+        <button class="btn btn-sm btn-ghost" id="qa-in" onclick="openVoucherForm('in')">📥 Nhập</button>
+        <button class="btn btn-sm btn-ghost" id="qa-out" onclick="openVoucherForm('out')">📤 Xuất</button>
+        <div class="user-chip" onclick="toggleUserMenu(event)">
+          <div class="avatar" id="user-avatar">?</div>
+          <div><div class="un" id="user-name">—</div><div class="ur" id="user-role"></div></div>
+        </div>
+        <div id="user-menu" class="hidden">
+          <div class="um-item" onclick="changePassModal()">🔑 Đổi mật khẩu</div>
+          <div class="um-item" onclick="doLogout()">🚪 Đăng xuất</div>
+        </div>
+      </div>
+    </header>
+    <main id="content"></main>
+  </div>
+</div>
+
+<div id="modal-root"><div class="modal-overlay" onclick="closeModal()"></div><div id="modal-box"></div></div>
+<div id="toast-root"></div>
+<div id="print-area"></div>
+<input type="file" id="file-input" class="hidden">
