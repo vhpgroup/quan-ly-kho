@@ -54,9 +54,6 @@ a:hover{text-decoration:underline}
 .login-card h1{text-align:center;font-size:23px;font-weight:800;margin:12px 0 2px;letter-spacing:-.2px}
 .login-sub{text-align:center;color:var(--muted);font-size:13px;margin-bottom:22px}
 .login-err{background:#fef2f2;color:var(--red);border:1px solid #fecaca;border-radius:10px;padding:9px 12px;font-size:13px;margin-bottom:12px}
-.login-demo{margin-top:16px;background:linear-gradient(180deg,#f8fafc,#f1f5f9);border:1px dashed var(--border2);border-radius:12px;padding:11px 12px;font-size:12.5px;text-align:center;color:var(--muted);line-height:1.75}
-.login-demo b{color:var(--text)}
-.login-warn{margin-top:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:9px 12px;font-size:12px;color:#92400e;line-height:1.6}
 .login-foot{position:relative;color:#8ea0bd;font-size:12px;letter-spacing:.2px}
 
 /* ============ LAYOUT ============ */
@@ -283,11 +280,6 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
     <div class="field"><label>Mật khẩu</label><input type="password" id="login-pass" autocomplete="current-password" placeholder="••••••••"></div>
     <div id="login-err" class="login-err hidden"></div>
     <button class="btn btn-primary btn-block" style="padding:11px" onclick="doLogin()">Đăng nhập</button>
-    <div class="login-demo hidden" id="login-demo">
-      Tài khoản mặc định: <b>admin / admin123</b><br>
-      <span class="muted">Dùng thử: quanly / quanly123 &nbsp;·&nbsp; nhanvien / nhanvien123</span>
-    </div>
-    <div id="login-storage-warn" class="login-warn hidden">⚠️ Trình duyệt đang chặn bộ nhớ cục bộ nên dữ liệu chỉ giữ tạm trong phiên này. Hãy <b>tải file HTML về máy và mở trực tiếp</b> để dữ liệu được lưu lâu dài.</div>
   </div>
   <div class="login-foot">Hoạt động ngoại tuyến — dữ liệu lưu ngay trên máy của bạn</div>
 </div>
@@ -1186,10 +1178,7 @@ function applySettingsUI(){
 /* ---------- Khởi động ---------- */
 function boot(){
   storageOK=storageAvailable();
-  if(!storageOK){
-    $('#storage-warn').classList.remove('hidden');
-    $('#login-storage-warn').classList.remove('hidden');
-  }
+  if(!storageOK) $('#storage-warn').classList.remove('hidden');
   DB=loadDB();
   if(!DB){
     DB=defaultDB();
@@ -1197,9 +1186,6 @@ function boot(){
     saveDB();
   }
   applySettingsUI();
-  // Gợi ý tài khoản: chỉ hiện khi admin còn dùng mật khẩu mặc định
-  var admin=DB.users.find(function(u){return u.username==='admin';});
-  if(admin && admin.passHash===hashPass('admin123')) $('#login-demo').classList.remove('hidden');
   // Enter để đăng nhập
   ['#login-user','#login-pass'].forEach(function(s){
     $(s).addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });

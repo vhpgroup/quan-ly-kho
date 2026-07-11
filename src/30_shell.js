@@ -174,10 +174,7 @@ function applySettingsUI(){
 /* ---------- Khởi động ---------- */
 function boot(){
   storageOK=storageAvailable();
-  if(!storageOK){
-    $('#storage-warn').classList.remove('hidden');
-    $('#login-storage-warn').classList.remove('hidden');
-  }
+  if(!storageOK) $('#storage-warn').classList.remove('hidden');
   DB=loadDB();
   if(!DB){
     DB=defaultDB();
@@ -185,9 +182,6 @@ function boot(){
     saveDB();
   }
   applySettingsUI();
-  // Gợi ý tài khoản: chỉ hiện khi admin còn dùng mật khẩu mặc định
-  var admin=DB.users.find(function(u){return u.username==='admin';});
-  if(admin && admin.passHash===hashPass('admin123')) $('#login-demo').classList.remove('hidden');
   // Enter để đăng nhập
   ['#login-user','#login-pass'].forEach(function(s){
     $(s).addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
