@@ -63,12 +63,28 @@ node test_engine.js
 python3 build.py
 ```
 
-## 🖥️ Đóng gói desktop (lộ trình)
+## 🖥️ App desktop (Electron)
 
-File `quan-ly-kho.html` chạy nguyên trạng trong Electron hoặc Tauri (localStorage hoạt động y hệt, dữ liệu lưu trong profile của app):
+Thư mục **`desktop/`** chứa bản đóng gói desktop hoàn chỉnh — cửa sổ riêng, icon riêng, menu tiếng Việt, một phiên bản duy nhất (mở lần 2 tự focus). Dữ liệu localStorage lưu trong hồ sơ ứng dụng (Windows: `%APPDATA%\quan-ly-kho-desktop`), xem đường dẫn cụ thể ở menu **Trợ giúp → Giới thiệu**. Vẫn nên tải file sao lưu định kỳ.
 
-- **Electron**: `win.loadFile('quan-ly-kho.html')` — đóng gói bằng electron-builder
-- **Tauri** (nhẹ hơn ~10MB): đặt file vào thư mục `dist` làm frontend tĩnh
+**Cách 1 — Build tự động trên GitHub (khuyên dùng, không cần cài gì):**
+
+1. Vào tab **Actions** → chọn workflow **Desktop build** → bấm **Run workflow**, hoặc push tag phiên bản: `git tag v1.1.0 && git push --tags`
+2. Chờ vài phút → tải file cài đặt ở mục **Artifacts** (hoặc trong **Releases** nếu build từ tag):
+   - `QuanLyKho-Setup-*.exe` — bộ cài Windows (chọn được thư mục, tạo shortcut)
+   - `QuanLyKho-Portable-*.exe` — bản chạy ngay không cần cài
+   - `QuanLyKho-*.AppImage` — Linux
+
+**Cách 2 — Build trên máy (cần Node.js ≥ 18):**
+
+```bash
+python3 build.py            # ghép bản web mới nhất
+cd desktop
+npm install
+npm start                   # chạy thử cửa sổ desktop
+npm run dist:win            # đóng gói Windows (chạy trên Windows)
+npm run dist:linux          # đóng gói Linux AppImage
+```
 
 ## ⚠️ Lưu ý
 

@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+desktop/node_modules/
+desktop/dist/
+desktop/app.html
+desktop/package-lock.json
+desktop/build/icon.png
