@@ -1643,6 +1643,17 @@ function vfPayLabels(t){
        : null;
 }
 function voucherRemain(v){ return round2((v.total||0)-((v.paid===undefined)?(v.total||0):v.paid)); }
+/* Gợi ý các kho khác đang còn hàng (hiện khi kho đang chọn không đủ tồn) */
+function vfStockHint(pid, whId){
+  var others=[];
+  activeWarehouses().forEach(function(w){
+    if(w.id===whId) return;
+    var s=getStock(w.id, pid);
+    if(s>0) others.push(esc(w.name)+': '+fmtQty(s));
+  });
+  if(!others.length) return '';
+  return '<div class="small" style="color:var(--amber);font-weight:600;white-space:nowrap">Còn ở '+others.join(' · ')+'</div>';
+}
 
 /* ---------- Danh sách phiếu theo loại ---------- */
 function partnerColLabel(types){
@@ -1785,8 +1796,11 @@ function vfBindSearch(){
       return normStr(p.name).indexOf(q)>=0 || normStr(p.sku).indexOf(q)>=0 || normStr(p.brand).indexOf(q)>=0;
     }).slice(0,8);
     dd.innerHTML=list.length?list.map(function(p){
-      var st=vfNeedsStock(VF.type)?getStock(whId,p.id):totalStock(p.id);
-      return '<div class="dd-item" onmousedown="vfPick(\''+p.id+'\')"><div><b>'+esc(p.name)+'</b> <span class="muted small">· '+esc(p.sku)+(p.brand?' · '+esc(p.brand):'')+'</span></div><div class="muted small">Tồn: '+fmtQty(st)+' '+esc(p.unit)+'</div></div>';
+      var needSt=vfNeedsStock(VF.type);
+      var st=needSt?getStock(whId,p.id):totalStock(p.id);
+      var tot=totalStock(p.id);
+      var extra=needSt&&Math.abs(tot-st)>1e-9?' <span style="color:var(--muted2)">· tổng '+fmtQty(tot)+'</span>':'';
+      return '<div class="dd-item" onmousedown="vfPick(\''+p.id+'\')"><div><b>'+esc(p.name)+'</b> <span class="muted small">· '+esc(p.sku)+(p.brand?' · '+esc(p.brand):'')+'</span></div><div class="muted small">'+(needSt?'Tồn tại kho: ':'Tồn: ')+fmtQty(st)+' '+esc(p.unit)+extra+'</div></div>';
     }).join(''):'<div class="dd-empty">Không tìm thấy sản phẩm phù hợp</div>';
     dd.classList.remove('hidden');
   });
@@ -1822,10 +1836,13 @@ function vfUpdateCalc(){
     var amtEl=$('#vfl-amt-'+i); if(amtEl) amtEl.textContent=fmtMoney(amt);
     if(vfNeedsStock(VF.type)){
       var st=getStock(whId,l.productId);
+      var over=l.qty>st;
       var qEl=$('#vfl-qty-'+i);
-      if(qEl) qEl.style.borderColor = l.qty>st ? 'var(--red)' : '';
+      if(qEl) qEl.style.borderColor = over ? 'var(--red)' : '';
       var stEl=$('#vfl-st-'+i);
-      if(stEl) stEl.className='r '+(l.qty>st?'num-neg':'muted');
+      if(stEl) stEl.className=over?'num-neg':'muted';
+      var hEl=$('#vfl-hint-'+i);
+      if(hEl) hEl.classList.toggle('hidden', !over);
     }
   });
   var tEl=$('#vf-total'); if(tEl) tEl.textContent=fmtMoney(total);
@@ -1865,7 +1882,7 @@ function renderVFLines(){
       '<td class="c muted">'+(i+1)+'</td>'+
       '<td><b>'+esc(p.name)+'</b><div class="small muted">'+esc(p.sku)+'</div></td>'+
       '<td class="c">'+esc(p.unit)+'</td>'+
-      (needSt?'<td id="vfl-st-'+i+'" class="r '+(over?'num-neg':'muted')+'">'+fmtQty(st)+'</td>':'')+
+      (needSt?'<td class="r"><span id="vfl-st-'+i+'" class="'+(over?'num-neg':'muted')+'">'+fmtQty(st)+'</span><span id="vfl-hint-'+i+'" class="'+(over?'':'hidden')+'">'+vfStockHint(l.productId,whId)+'</span></td>':'')+
       '<td style="width:110px"><input type="number" step="any" min="0" id="vfl-qty-'+i+'" value="'+l.qty+'" style="text-align:right'+(over?';border-color:var(--red)':'')+'" oninput="vfSetQty('+i+',this.value)"></td>'+
       (hasPrice?'<td style="width:140px"><input type="number" step="any" min="0" value="'+l.price+'" style="text-align:right" oninput="vfSetPrice('+i+',this.value)"></td>':'')+
       (hasPrice?'<td class="r" id="vfl-amt-'+i+'"><b>'+fmtMoney(amt)+'</b></td>':'')+
