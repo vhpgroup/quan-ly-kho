@@ -14,10 +14,11 @@ OUT = os.path.join(BASE, 'quan-ly-kho.html')
 
 PARTS_JS = [
     '10_core.js',      # tiện ích, SHA-256, đọc số thành chữ, lưu trữ localStorage
-    '20_engine.js',    # tồn kho, giá vốn BQGQ, ghi/sửa/hủy/xóa phiếu, số liệu báo cáo
+    '20_engine.js',    # tồn kho, giá vốn BQGQ, ghi/sửa/hủy/xóa phiếu, công nợ, báo cáo
     '30_shell.js',     # điều hướng, modal, toast, đăng nhập, phân quyền
     '40_catalog.js',   # sản phẩm, nhóm hàng, đối tác, kho, người dùng
     '50_vouchers.js',  # form phiếu nhập/xuất/chuyển/trả, kiểm kê, chi tiết & in phiếu
+    '55_finance.js',   # phiếu thu/chi, sổ & báo cáo công nợ NCC/khách hàng
     '60_tracking.js',  # tồn kho, lịch sử phiếu, báo cáo
     '70_system.js',    # Excel, sao lưu/khôi phục, nhật ký, dashboard, dữ liệu mẫu
 ]

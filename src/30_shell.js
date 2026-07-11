@@ -52,6 +52,7 @@ var PAGES=[
   {id:'stockout',   icon:'📤', title:'Xuất kho'},
   {id:'transfer',   icon:'🔁', title:'Chuyển kho'},
   {id:'returns',    icon:'↩️', title:'Trả hàng'},
+  {id:'finance',    icon:'💳', title:'Thu chi & Công nợ'},
   {id:'stocktake',  icon:'📋', title:'Kiểm kê', roles:['admin','manager']},
   {group:'THEO DÕI'},
   {id:'inventory',  icon:'🗃️', title:'Tồn kho'},

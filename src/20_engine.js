@@ -25,6 +25,8 @@ function nextCode(type){
   DB.counters[type]=c+1;
   return VTYPES[type].code + String(c).padStart(5,'0');
 }
+/* Phiếu có giá trị tiền với đối tác (tham gia công nợ) */
+function isMoneyVoucher(t){ return t==='in'||t==='out'||t==='return_sup'||t==='return_cus'; }
 
 /*
  postVoucher(inp) — ghi 1 phiếu và cập nhật tồn + giá vốn.
@@ -115,8 +117,9 @@ function postVoucher(inp){
     createdBy:SESSION?SESSION.username:'hệ thống', createdAt:nowISO()
   };
   applyVoucherLines(v, val.lines);
+  v.paid=isMoneyVoucher(t) ? Math.max(0, round2(parseNum(inp.paid))) : 0;
   DB.vouchers.unshift(v);
-  audit('Tạo phiếu', VTYPES[t].name+' '+v.code+' — '+v.lines.length+' dòng, tổng '+fmtMoney(v.total)+' đ');
+  audit('Tạo phiếu', VTYPES[t].name+' '+v.code+' — '+v.lines.length+' dòng, tổng '+fmtMoney(v.total)+' đ'+(isMoneyVoucher(t)&&v.paid<v.total?', đã TT '+fmtMoney(v.paid)+' đ':''));
   saveDB();
   return {ok:true, voucher:v};
 }
@@ -158,6 +161,7 @@ function updateVoucher(id, inp){
   v.partnerId=inp.partnerId||null;
   v.note=inp.note||'';
   applyVoucherLines(v, val.lines);
+  v.paid=isMoneyVoucher(v.type) ? Math.max(0, round2(parseNum(inp.paid))) : 0;
   v.editedBy=SESSION?SESSION.username:'hệ thống';
   v.editedAt=nowISO();
   audit('Sửa phiếu', VTYPES[v.type].name+' '+v.code+' — '+v.lines.length+' dòng, tổng mới '+fmtMoney(v.total)+' đ');
@@ -218,6 +222,125 @@ function deleteVoucher(id){
   saveDB();
   return {ok:true};
 }
+
+/* ==================== CÔNG NỢ & PHIẾU THU / CHI ====================
+ Quy ước dấu (theo góc nhìn CỦA TA):
+ - NCC   (phải trả): nhập +(total−paid) · trả hàng NCC −(total−paid) · phiếu chi −amount · phiếu thu +amount
+ - Khách (phải thu): xuất +(total−paid) · khách trả hàng −(total−paid) · phiếu thu −amount · phiếu chi +amount
+ Số dương = đối tác đang nợ theo chiều thông thường; số âm = trả thừa / hoàn ngược.
+ Phiếu đã hủy (status='void') không tính. paid trên phiếu trả hàng = tiền đã hoàn ngay khi trả. */
+function nextPayCode(type){
+  var key='pay_'+type;
+  var c=DB.counters[key]||1;
+  DB.counters[key]=c+1;
+  return PTYPES[type].code + String(c).padStart(5,'0');
+}
+function voucherDebtDelta(v){
+  if(v.status==='void' || !v.partnerId || !isMoneyVoucher(v.type)) return 0;
+  var paid=(v.paid===undefined)?(v.total||0):v.paid;
+  var d=round2((v.total||0)-paid);
+  return (v.type==='in'||v.type==='out') ? d : -d;
+}
+function paymentDebtDelta(pm, partnerType){
+  if(pm.status==='void') return 0;
+  if(partnerType==='supplier') return pm.type==='payment' ? -pm.amount : pm.amount;
+  return pm.type==='receipt' ? -pm.amount : pm.amount;
+}
+function postPayment(inp){
+  var pt=PTYPES[inp.type];
+  if(!pt) return {ok:false, error:'Loại phiếu thu/chi không hợp lệ'};
+  var partner=partnerById(inp.partnerId);
+  if(!partner) return {ok:false, error:'Chưa chọn đối tác'};
+  var amount=round2(parseNum(inp.amount));
+  if(!(amount>0)) return {ok:false, error:'Số tiền phải lớn hơn 0'};
+  var pm={
+    id:uid(), code:nextPayCode(inp.type), type:inp.type,
+    date:(inp.date||todayStr()).slice(0,10),
+    partnerId:partner.id, amount:amount,
+    method:inp.method==='bank'?'bank':'cash',
+    note:inp.note||'', status:'posted',
+    createdBy:SESSION?SESSION.username:'hệ thống', createdAt:nowISO()
+  };
+  DB.payments.unshift(pm);
+  audit('Tạo phiếu', pt.name+' '+pm.code+' — '+partner.name+': '+fmtMoney(amount)+' đ');
+  saveDB();
+  return {ok:true, payment:pm};
+}
+function voidPayment(id){
+  var pm=DB.payments.find(function(x){return x.id===id;});
+  if(!pm) return {ok:false, error:'Không tìm thấy phiếu'};
+  if(pm.status==='void') return {ok:false, error:'Phiếu này đã hủy trước đó'};
+  pm.status='void';
+  pm.voidedBy=SESSION?SESSION.username:'hệ thống';
+  pm.voidedAt=nowISO();
+  audit('Hủy phiếu', PTYPES[pm.type].name+' '+pm.code);
+  saveDB();
+  return {ok:true};
+}
+function deletePayment(id){
+  var pm=DB.payments.find(function(x){return x.id===id;});
+  if(!pm) return {ok:false, error:'Không tìm thấy phiếu'};
+  DB.payments=DB.payments.filter(function(x){return x.id!==id;});
+  audit('Xóa phiếu', PTYPES[pm.type].name+' '+pm.code+' — '+partnerName(pm.partnerId)+': '+fmtMoney(pm.amount)+' đ');
+  saveDB();
+  return {ok:true};
+}
+/* Công nợ hiện tại của 1 đối tác */
+function partnerDebt(partnerId){
+  var partner=partnerById(partnerId); if(!partner) return 0;
+  var d=0;
+  DB.vouchers.forEach(function(v){ if(v.partnerId===partnerId) d+=voucherDebtDelta(v); });
+  DB.payments.forEach(function(pm){ if(pm.partnerId===partnerId) d+=paymentDebtDelta(pm, partner.type); });
+  return round2(d);
+}
+/* Bảng tổng hợp công nợ theo loại đối tác ('supplier'|'customer') */
+function debtSummary(type){
+  var rows=[];
+  DB.partners.filter(function(p){return p.type===type;}).forEach(function(p){
+    var gross=0, returned=0, paidNet=0, has=false;
+    DB.vouchers.forEach(function(v){
+      if(v.partnerId!==p.id || v.status==='void' || !isMoneyVoucher(v.type)) return;
+      has=true;
+      var paid=(v.paid===undefined)?(v.total||0):v.paid;
+      if(v.type==='in'||v.type==='out'){ gross+=(v.total||0); paidNet+=paid; }
+      else { returned+=(v.total||0); paidNet-=paid; }
+    });
+    DB.payments.forEach(function(pm){
+      if(pm.partnerId!==p.id || pm.status==='void') return;
+      has=true;
+      paidNet += (type==='supplier') ? (pm.type==='payment'?pm.amount:-pm.amount)
+                                     : (pm.type==='receipt'?pm.amount:-pm.amount);
+    });
+    var balance=round2(gross-returned-paidNet);
+    if(has) rows.push({partner:p, gross:round2(gross), returned:round2(returned), paidNet:round2(paidNet), balance:balance});
+  });
+  rows.sort(function(a,b){ return b.balance-a.balance; });
+  return rows;
+}
+/* Sổ chi tiết công nợ 1 đối tác: các dòng phát sinh theo thời gian + số dư lũy kế */
+function partnerStatement(partnerId){
+  var p=partnerById(partnerId); if(!p) return [];
+  var entries=[];
+  DB.vouchers.forEach(function(v){
+    if(v.partnerId!==partnerId || v.status==='void' || !isMoneyVoucher(v.type)) return;
+    entries.push({date:v.date, time:v.createdAt||'', code:v.code, kind:'voucher', id:v.id,
+      label:VTYPES[v.type].icon+' '+VTYPES[v.type].name, total:v.total||0,
+      paid:(v.paid===undefined)?(v.total||0):v.paid, delta:voucherDebtDelta(v)});
+  });
+  DB.payments.forEach(function(pm){
+    if(pm.partnerId!==partnerId || pm.status==='void') return;
+    entries.push({date:pm.date, time:pm.createdAt||'', code:pm.code, kind:'payment', id:pm.id,
+      label:PTYPES[pm.type].icon+' '+PTYPES[pm.type].name+(pm.method==='bank'?' (CK)':' (TM)'), total:pm.amount,
+      paid:null, delta:paymentDebtDelta(pm, p.type)});
+  });
+  entries.sort(function(a,b){ return a.date===b.date ? (a.time<b.time?-1:1) : (a.date<b.date?-1:1); });
+  var bal=0;
+  entries.forEach(function(e){ bal=round2(bal+e.delta); e.balance=bal; });
+  return entries;
+}
+/* Tổng phải thu / phải trả (chỉ cộng số dương — trả thừa xem ở từng đối tác) */
+function totalReceivable(){ var s=0; debtSummary('customer').forEach(function(r){ if(r.balance>0) s+=r.balance; }); return round2(s); }
+function totalPayable(){ var s=0; debtSummary('supplier').forEach(function(r){ if(r.balance>0) s+=r.balance; }); return round2(s); }
 
 /* ---------- Cảnh báo tồn thấp ---------- */
 function lowStockProducts(){

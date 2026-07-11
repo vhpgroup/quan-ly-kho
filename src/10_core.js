@@ -132,6 +132,11 @@ var VTYPES={
   return_cus:{ code:'KT', name:'Khách trả hàng',      icon:'♻️', color:'#7c3aed', flow:'+' },
   adjust:    { code:'KK', name:'Điều chỉnh kiểm kê',  icon:'📋', color:'#0891b2', flow:'~' }
 };
+/* Phiếu thu / chi (quản lý công nợ) */
+var PTYPES={
+  receipt: { code:'PT', name:'Phiếu thu', icon:'💰', color:'#16a34a' },
+  payment: { code:'PC', name:'Phiếu chi', icon:'💸', color:'#dc2626' }
+};
 
 /* ---------- Trạng thái toàn cục ---------- */
 var DB=null;
@@ -168,7 +173,7 @@ function defaultDB(){
     settings:{ companyName:'', companyAddress:'', companyPhone:'', companyTax:'' },
     users:[{ id:uid(), username:'admin', passHash:hashPass('admin123'), fullName:'Quản trị hệ thống', role:'admin', active:true, createdAt:nowISO() }],
     categories:[], products:[], partners:[], warehouses:[],
-    stocks:{}, vouchers:[], auditLog:[], counters:{}
+    stocks:{}, vouchers:[], payments:[], auditLog:[], counters:{}
   });
 }
 function migrateDB(obj){
@@ -176,7 +181,12 @@ function migrateDB(obj){
   obj.settings=obj.settings||{};
   obj.users=obj.users||[]; obj.categories=obj.categories||[]; obj.products=obj.products||[];
   obj.partners=obj.partners||[]; obj.warehouses=obj.warehouses||[];
-  obj.stocks=obj.stocks||{}; obj.vouchers=obj.vouchers||[]; obj.auditLog=obj.auditLog||[]; obj.counters=obj.counters||{};
+  obj.stocks=obj.stocks||{}; obj.vouchers=obj.vouchers||[]; obj.payments=obj.payments||[]; obj.auditLog=obj.auditLog||[]; obj.counters=obj.counters||{};
+  // Di trú công nợ: phiếu có tiền lập trước khi có tính năng thanh toán (thiếu trường paid)
+  // được coi là ĐÃ THANH TOÁN ĐỦ để công nợ khởi điểm bằng 0 (không hồi tố nợ cũ).
+  obj.vouchers.forEach(function(v){
+    if(v.paid===undefined) v.paid=(v.type==='in'||v.type==='out'||v.type==='return_sup'||v.type==='return_cus') ? (v.total||0) : 0;
+  });
   return obj;
 }
 

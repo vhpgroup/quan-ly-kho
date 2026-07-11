@@ -256,11 +256,12 @@ function exportInventory(){
 }
 function exportHistory(){
   var list=histData();
-  var s1=[['Số phiếu','Loại','Ngày','Kho','Kho nhận','Đối tác','Số dòng','Tổng tiền','Người lập','Ghi chú','Trạng thái']];
+  var s1=[['Số phiếu','Loại','Ngày','Kho','Kho nhận','Đối tác','Số dòng','Tổng tiền','Đã thanh toán','Còn nợ','Người lập','Ghi chú','Trạng thái']];
   var s2=[['Số phiếu','Loại','Ngày','Kho','Mã hàng','Tên hàng','ĐVT','Số lượng','Đơn giá','Thành tiền','Giá vốn']];
   list.forEach(function(v){
     var vt=VTYPES[v.type];
-    s1.push([v.code,vt.name,v.date,whName(v.warehouseId),v.type==='transfer'?whName(v.toWarehouseId):'',v.partnerId?partnerName(v.partnerId):'',v.lines.length,v.total,v.createdBy,v.note||'',v.status==='void'?'Đã hủy':'Đã ghi sổ']);
+    var paid=isMoneyVoucher(v.type)?((v.paid===undefined)?v.total:v.paid):'';
+    s1.push([v.code,vt.name,v.date,whName(v.warehouseId),v.type==='transfer'?whName(v.toWarehouseId):'',v.partnerId?partnerName(v.partnerId):'',v.lines.length,v.total,paid,isMoneyVoucher(v.type)&&v.status!=='void'?round2(v.total-(paid||0)):'',v.createdBy,v.note||'',v.status==='void'?'Đã hủy':'Đã ghi sổ']);
     v.lines.forEach(function(l){
       s2.push([v.code,vt.name,v.date,whName(v.warehouseId),l.sku,l.name,l.unit,l.qty,l.price,Math.round(l.qty*l.price),l.cost]);
     });
@@ -447,12 +448,15 @@ RENDERERS.dashboard=function(c){
   var lowRows=st.lowList.slice(0,8).map(function(p){
     return '<tr class="click" onclick="showPage(\'products\')"><td><b>'+esc(p.sku)+'</b></td><td>'+esc(p.name)+'</td><td class="r low-flag">'+fmtQty(totalStock(p.id))+'</td><td class="r muted">'+fmtQty(p.minStock)+'</td><td class="c">'+esc(p.unit)+'</td></tr>';
   }).join('');
+  var rcv=totalReceivable(), pay=totalPayable();
   c.innerHTML=banner+
   '<div class="kpis">'+
     '<div class="kpi"><div class="ic" style="background:#eff6ff">📦</div><div><div class="v">'+st.skuCount+'</div><div class="l">Mặt hàng đang kinh doanh</div></div></div>'+
     '<div class="kpi"><div class="ic" style="background:#f0fdf4">💰</div><div><div class="v">'+fmtMoney(st.stockValue)+' đ</div><div class="l">Giá trị tồn kho (theo giá vốn)</div></div></div>'+
     '<div class="kpi"><div class="ic" style="background:'+(st.lowList.length?'#fef2f2':'#f8fafc')+'">⚠️</div><div><div class="v" style="color:'+(st.lowList.length?'var(--red)':'inherit')+'">'+st.lowList.length+'</div><div class="l">Mặt hàng dưới tồn tối thiểu</div></div></div>'+
     '<div class="kpi"><div class="ic" style="background:#fff7ed">🔄</div><div><div class="v">'+st.inTodayCount+' nhập · '+st.outTodayCount+' xuất</div><div class="l">Phiếu hôm nay</div></div></div>'+
+    '<div class="kpi click" onclick="FIN.tab=\'cus\';showPage(\'finance\')" style="cursor:pointer"><div class="ic" style="background:#ecfeff">📈</div><div><div class="v'+(rcv>0?' num-neg':'')+'">'+fmtMoney(rcv)+' đ</div><div class="l">Còn phải thu khách hàng</div></div></div>'+
+    '<div class="kpi click" onclick="FIN.tab=\'sup\';showPage(\'finance\')" style="cursor:pointer"><div class="ic" style="background:#fffbeb">📉</div><div><div class="v'+(pay>0?' num-neg':'')+'">'+fmtMoney(pay)+' đ</div><div class="l">Còn phải trả nhà cung cấp</div></div></div>'+
   '</div>'+
   '<div class="grid2">'+
     '<div class="card"><div class="card-title">📊 Giá trị nhập / xuất 7 ngày gần nhất</div><div class="chart">'+chart+'</div>'+
@@ -496,20 +500,23 @@ function seedDemo(){
     {id:uid(),username:'quanly',passHash:hashPass('quanly123'),fullName:'Trần Quản Lý',role:'manager',active:true,createdAt:nowISO()},
     {id:uid(),username:'nhanvien',passHash:hashPass('nhanvien123'),fullName:'Lê Nhân Viên',role:'staff',active:true,createdAt:nowISO()}
   );
-  postVoucher({type:'in', date:dayOffset(-7), warehouseId:w1.id, partnerId:s1.id, note:'Nhập hàng văn phòng phẩm đầu kỳ',
+  postVoucher({type:'in', date:dayOffset(-7), warehouseId:w1.id, partnerId:s1.id, note:'Nhập hàng văn phòng phẩm đầu kỳ', paid:3000000,
     lines:[{productId:p1.id,qty:50,price:65000},{productId:p2.id,qty:200,price:3500},{productId:p3.id,qty:60,price:15000}]});
-  postVoucher({type:'in', date:dayOffset(-6), warehouseId:w1.id, partnerId:s2.id, note:'Nhập thiết bị điện tử',
+  postVoucher({type:'in', date:dayOffset(-6), warehouseId:w1.id, partnerId:s2.id, note:'Nhập thiết bị điện tử', paid:9725000,
     lines:[{productId:p4.id,qty:20,price:180000},{productId:p5.id,qty:15,price:250000},{productId:p6.id,qty:25,price:95000}]});
-  postVoucher({type:'in', date:dayOffset(-5), warehouseId:w2.id, partnerId:s1.id, note:'Nhập vật tư đóng gói cho chi nhánh',
+  postVoucher({type:'in', date:dayOffset(-5), warehouseId:w2.id, partnerId:s1.id, note:'Nhập vật tư đóng gói cho chi nhánh', paid:4800000,
     lines:[{productId:p7.id,qty:300,price:12000},{productId:p8.id,qty:150,price:8000}]});
   postVoucher({type:'transfer', date:dayOffset(-3), warehouseId:w1.id, toWarehouseId:w2.id, note:'Bổ sung VPP cho chi nhánh',
     lines:[{productId:p1.id,qty:10},{productId:p2.id,qty:50}]});
-  postVoucher({type:'out', date:dayOffset(-2), warehouseId:w1.id, partnerId:k1.id, note:'Xuất bán theo đơn số 025',
+  postVoucher({type:'out', date:dayOffset(-2), warehouseId:w1.id, partnerId:k1.id, note:'Xuất bán theo đơn số 025', paid:2000000,
     lines:[{productId:p1.id,qty:15,price:75000},{productId:p4.id,qty:5,price:220000},{productId:p2.id,qty:40,price:5000}]});
-  postVoucher({type:'out', date:dayOffset(-1), warehouseId:w2.id, partnerId:k2.id, note:'Xuất bán lẻ',
+  postVoucher({type:'out', date:dayOffset(-1), warehouseId:w2.id, partnerId:k2.id, note:'Xuất bán lẻ', paid:1935000,
     lines:[{productId:p7.id,qty:80,price:15000},{productId:p8.id,qty:30,price:12000},{productId:p1.id,qty:5,price:75000}]});
-  postVoucher({type:'return_cus', date:todayStr(), warehouseId:w1.id, partnerId:k1.id, note:'Khách trả 1 chuột do lỗi nút cuộn',
+  postVoucher({type:'return_cus', date:todayStr(), warehouseId:w1.id, partnerId:k1.id, note:'Khách trả 1 chuột do lỗi nút cuộn', paid:0,
     lines:[{productId:p4.id,qty:1,price:220000}]});
+  // Phiếu thu / chi mẫu → còn phải trả NCC001: 1.850.000 − 850.000 = 1.000.000 · còn phải thu KH001: 425.000 − 220.000 − 105.000 = 100.000
+  postPayment({type:'payment', date:dayOffset(-1), partnerId:s1.id, amount:850000, method:'bank', note:'Trả bớt nợ tiền hàng VPP đầu kỳ'});
+  postPayment({type:'receipt', date:todayStr(), partnerId:k1.id, amount:105000, method:'cash', note:'Thu nợ đơn số 025'});
   DB.meta.demo=true;
   SESSION=oldSession;
 }

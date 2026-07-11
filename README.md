@@ -20,6 +20,7 @@ Phần mềm quản lý kho nội bộ cho công ty — **web app một file duy
 
 - **Nghiệp vụ phiếu**: nhập kho · xuất kho · chuyển kho · trả hàng NCC · khách trả hàng · kiểm kê & điều chỉnh — mỗi phiếu có số chứng từ tự động, in được (kèm số tiền bằng chữ, khung ký tên)
 - **Sửa / Hủy / Xóa phiếu**: sửa phiếu tính lại tồn kho đúng (có rollback nếu dữ liệu mới không hợp lệ); hủy giữ dấu vết sổ sách; xóa vĩnh viễn (chỉ Quản trị) hoàn tác tồn trước khi gỡ
+- **Công nợ & thu chi**: ghi "đã thanh toán" ngay trên phiếu nhập/xuất/trả hàng · phiếu thu (PT) / phiếu chi (PC) in được · sổ chi tiết công nợ từng đối tác có số dư lũy kế · báo cáo còn phải thu / phải trả (xuất Excel)
 - **Giá vốn bình quân gia quyền** tự cập nhật mỗi lần nhập; lợi nhuận chốt theo từng dòng xuất
 - **Tồn kho** theo từng kho + cảnh báo dưới tồn tối thiểu
 - **Báo cáo**: Nhập–Xuất–Tồn theo kỳ · Doanh thu & Lợi nhuận · Top sản phẩm — đều xuất Excel
@@ -43,10 +44,11 @@ Phần mềm quản lý kho nội bộ cho công ty — **web app một file duy
     ├── 01_head.html   # <head> + toàn bộ CSS
     ├── 02_body.html   # khung HTML (đăng nhập, sidebar, topbar, modal, in)
     ├── 10_core.js     # tiện ích, SHA-256, đọc số thành chữ, lưu trữ
-    ├── 20_engine.js   # tồn kho, giá vốn BQGQ, ghi/sửa/hủy/xóa phiếu, báo cáo
+    ├── 20_engine.js   # tồn kho, giá vốn BQGQ, ghi/sửa/hủy/xóa phiếu, công nợ, báo cáo
     ├── 30_shell.js    # điều hướng, modal, toast, đăng nhập, phân quyền
     ├── 40_catalog.js  # sản phẩm, nhóm hàng, đối tác, kho, người dùng
     ├── 50_vouchers.js # form phiếu, kiểm kê, chi tiết & in phiếu
+    ├── 55_finance.js  # phiếu thu/chi, sổ & báo cáo công nợ NCC/khách hàng
     ├── 60_tracking.js # tồn kho, lịch sử, báo cáo
     └── 70_system.js   # Excel, sao lưu, nhật ký, dashboard, dữ liệu mẫu
 ```
@@ -55,7 +57,7 @@ Quy trình sửa code:
 
 ```bash
 # 1. Sửa các module trong src/
-# 2. Chạy kiểm thử (99 test: giá vốn, tồn kho, sửa/hủy/xóa phiếu, báo cáo…)
+# 2. Chạy kiểm thử (138 test: giá vốn, tồn kho, sửa/hủy/xóa phiếu, công nợ, báo cáo…)
 node test_engine.js
 # 3. Ghép bản build mới
 python3 build.py
@@ -72,3 +74,5 @@ File `quan-ly-kho.html` chạy nguyên trạng trong Electron hoặc Tauri (loca
 
 - Đây là bản **một máy / một trình duyệt** — nhiều người dùng chung dữ liệu thời gian thực cần bản nâng cấp server (Node.js + SQLite)
 - Hủy/xóa phiếu nhập không hồi tố giá vốn bình quân của các phiếu xuất đã lập trước đó
+- Công nợ theo **đối tác** (không phân bổ theo từng hóa đơn); phiếu lập từ phiên bản cũ (trước khi có công nợ) được coi là **đã thanh toán đủ** khi nâng cấp dữ liệu
+- Hủy phiếu nhập/xuất sẽ loại toàn bộ phiếu (kể cả phần đã thanh toán) khỏi công nợ — nếu tiền đã thực trao, hãy lập phiếu thu/chi hoàn tiền tương ứng

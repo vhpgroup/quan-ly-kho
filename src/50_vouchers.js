@@ -7,6 +7,14 @@ function typePage(t){ return t==='in'?'stockin':t==='out'?'stockout':t==='transf
 function vfNeedsStock(t){ return t==='out'||t==='transfer'||t==='return_sup'; }
 function vfHasPrice(t){ return t!=='transfer'; }
 function vfPartnerType(t){ return (t==='in'||t==='return_sup')?'supplier':(t==='out'||t==='return_cus')?'customer':null; }
+function vfPayLabels(t){
+  return t==='in'         ? {label:'Đã trả NCC (đ)',          owe:'Còn nợ NCC'}
+       : t==='out'        ? {label:'Khách đã trả (đ)',        owe:'Khách còn nợ'}
+       : t==='return_sup' ? {label:'NCC đã hoàn tiền (đ)',    owe:'NCC còn phải hoàn'}
+       : t==='return_cus' ? {label:'Đã hoàn tiền khách (đ)',  owe:'Còn phải hoàn khách'}
+       : null;
+}
+function voucherRemain(v){ return round2((v.total||0)-((v.paid===undefined)?(v.total||0):v.paid)); }
 
 /* ---------- Danh sách phiếu theo loại ---------- */
 function partnerColLabel(types){
@@ -22,6 +30,7 @@ function voucherTable(types, limit){
   var rows=list.map(function(v){
     var vt=VTYPES[v.type];
     var isVoid=v.status==='void';
+    var remain=(!isVoid && isMoneyVoucher(v.type)) ? voucherRemain(v) : 0;
     return '<tr class="click" onclick="voucherDetail(\''+v.id+'\')">'+
       '<td><span class="badge" style="background:'+vt.color+'1a;color:'+vt.color+'">'+vt.icon+' '+esc(v.code)+'</span></td>'+
       '<td>'+fmtDate(v.date)+'</td>'+
@@ -29,13 +38,14 @@ function voucherTable(types, limit){
       '<td>'+(v.partnerId?esc(partnerName(v.partnerId)):'<span class="muted">—</span>')+'</td>'+
       '<td class="r">'+v.lines.length+'</td>'+
       '<td class="r"'+(isVoid?' style="text-decoration:line-through"':'')+'><b>'+fmtMoney(v.total)+'</b></td>'+
+      '<td class="r">'+(isMoneyVoucher(v.type)&&!isVoid ? (Math.abs(remain)<0.005?'<span class="tag tag-green">Đã TT đủ</span>':'<b class="num-neg">'+fmtMoney(remain)+'</b>') : '<span class="muted">—</span>')+'</td>'+
       '<td class="muted">'+esc(v.createdBy)+'</td>'+
       '<td class="c">'+(isVoid?'<span class="tag tag-red">Đã hủy</span>':'<span class="tag tag-green">Đã ghi sổ</span>')+'</td>'+
     '</tr>';
   }).join('');
   return '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
-    '<th>Số phiếu</th><th>Ngày</th><th>Kho</th><th>'+partnerColLabel(types)+'</th><th class="r">Dòng</th><th class="r">Tổng tiền (đ)</th><th>Người lập</th><th class="c">Trạng thái</th>'+
-    '</tr></thead><tbody>'+(rows||'<tr><td colspan="8"><div class="empty">Chưa có phiếu nào</div></td></tr>')+'</tbody></table></div>'+
+    '<th>Số phiếu</th><th>Ngày</th><th>Kho</th><th>'+partnerColLabel(types)+'</th><th class="r">Dòng</th><th class="r">Tổng tiền (đ)</th><th class="r">Còn nợ (đ)</th><th>Người lập</th><th class="c">Trạng thái</th>'+
+    '</tr></thead><tbody>'+(rows||'<tr><td colspan="9"><div class="empty">Chưa có phiếu nào</div></td></tr>')+'</tbody></table></div>'+
     '<div class="pagin">Hiển thị '+Math.min(list.length,limit||30)+' phiếu gần nhất — xem tất cả trong mục <a href="javascript:showPage(\'history\')">Lịch sử phiếu</a></div>';
 }
 function bizPage(c, type, introHTML){
@@ -114,6 +124,9 @@ function openVoucherForm(type, editId){
       '<div class="field"><label>'+whLabel+' <span class="req">*</span></label><select id="vf-wh" onchange="renderVFLines()">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
       (type==='transfer'?'<div class="field"><label>Kho nhận (đích) <span class="req">*</span></label><select id="vf-towh">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selToWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>':'')+
       (pt?'<div class="field"><label>'+(pt==='supplier'?'Nhà cung cấp':'Khách hàng')+'</label><select id="vf-partner"><option value="">— Không chọn —</option>'+partners.map(function(p){return '<option value="'+p.id+'" '+(editV&&editV.partnerId===p.id?'selected':'')+'>'+esc(p.name)+'</option>';}).join('')+'</select></div>':'')+
+      (isMoneyVoucher(type)?'<div class="field"><label>'+vfPayLabels(type).label+'</label>'+
+        '<div style="display:flex;gap:6px"><input type="number" min="0" step="any" id="vf-paid" style="text-align:right" value="'+(editV?((editV.paid===undefined)?editV.total:editV.paid):0)+'" oninput="vfUpdateCalc()"><button class="btn btn-ghost" type="button" onclick="vfPayFull()" title="Điền bằng đúng tổng tiền phiếu">Đủ</button></div>'+
+        '<div class="small" id="vf-debt" style="margin-top:5px"></div></div>':'')+
       '<div class="field"><label>Ghi chú</label><input id="vf-note" placeholder="Diễn giải…" value="'+esc(editV?editV.note:'')+'"></div>'+
     '</div>'+
   '</div>'+
@@ -188,6 +201,22 @@ function vfUpdateCalc(){
     }
   });
   var tEl=$('#vf-total'); if(tEl) tEl.textContent=fmtMoney(total);
+  vfUpdateDebt(total);
+}
+function vfUpdateDebt(total){
+  var payEl=$('#vf-paid'), dEl=$('#vf-debt');
+  if(!payEl||!dEl) return;
+  var remain=round2(total-parseNum(payEl.value));
+  var owe=vfPayLabels(VF.type).owe;
+  if(Math.abs(remain)<0.005) dEl.innerHTML='<span class="num-pos">✓ Đã thanh toán đủ</span>';
+  else if(remain>0) dEl.innerHTML=owe+': <b class="num-neg">'+fmtMoney(remain)+' đ</b>'+($('#vf-partner')&&!$('#vf-partner').value?' <span class="muted">— chọn đối tác để theo dõi công nợ</span>':'');
+  else dEl.innerHTML='Trả thừa: <b style="color:var(--amber)">'+fmtMoney(-remain)+' đ</b>';
+}
+function vfPayFull(){
+  var hasPrice=vfHasPrice(VF.type), total=0;
+  VF.lines.forEach(function(l){ total+=l.qty*(hasPrice?l.price:0); });
+  var payEl=$('#vf-paid'); if(payEl) payEl.value=round2(total);
+  vfUpdateCalc();
 }
 function renderVFLines(){
   var box=$('#vf-lines'); if(!box||!VF) return;
@@ -195,6 +224,7 @@ function renderVFLines(){
   var needSt=vfNeedsStock(t), hasPrice=vfHasPrice(t);
   if(!VF.lines.length){
     box.innerHTML='<div class="empty">Chưa có dòng hàng nào — tìm sản phẩm ở ô phía trên để thêm vào phiếu</div>';
+    vfUpdateDebt(0);
     return;
   }
   var total=0;
@@ -223,6 +253,7 @@ function renderVFLines(){
     '</tr></thead><tbody>'+rows+'</tbody>'+
     (hasPrice?'<tfoot><tr><td colspan="'+(needSt?6:5)+'" class="r">TỔNG CỘNG</td><td class="r" id="vf-total" style="font-size:15px;color:var(--primary)">'+fmtMoney(total)+'</td><td></td></tr></tfoot>':'')+
     '</table></div>';
+  vfUpdateDebt(total);
 }
 function saveVoucher(doPrint){
   if(!VF) return;
@@ -233,6 +264,7 @@ function saveVoucher(doPrint){
     toWarehouseId:$('#vf-towh')?$('#vf-towh').value:null,
     partnerId:$('#vf-partner')?($('#vf-partner').value||null):null,
     note:($('#vf-note').value||'').trim(),
+    paid:$('#vf-paid')?parseNum($('#vf-paid').value):0,
     lines:VF.lines
   };
   if(!inp.date) return toast('Chọn ngày chứng từ','error');
@@ -273,6 +305,18 @@ function voucherDetail(id){
     (v.status==='void'?'<div class="banner banner-warn" style="margin-bottom:12px">⛔ Phiếu này đã bị hủy bởi <b>'+esc(v.voidedBy||'')+'</b> lúc '+fmtDateTime(v.voidedAt)+' — không còn tác động lên tồn kho.</div>':'');
   var profit=0;
   if(v.type==='out'){ v.lines.forEach(function(l){ profit+=(l.price-l.cost)*l.qty; }); }
+  var payHTML='';
+  if(isMoneyVoucher(v.type) && v.status!=='void'){
+    var paid=(v.paid===undefined)?v.total:v.paid;
+    var remain=voucherRemain(v);
+    payHTML='<div style="margin-top:12px;display:flex;gap:20px;justify-content:flex-end;flex-wrap:wrap;font-size:13.5px;align-items:center">'+
+      '<span>'+vfPayLabels(v.type).label.replace(' (đ)','')+': <b class="num-pos">'+fmtMoney(paid)+' đ</b></span>'+
+      '<span>'+(Math.abs(remain)<0.005 ? '<span class="tag tag-green">✓ Đã thanh toán đủ</span>'
+        : remain>0 ? vfPayLabels(v.type).owe+': <b class="num-neg">'+fmtMoney(remain)+' đ</b>'
+        : 'Trả thừa: <b style="color:var(--amber)">'+fmtMoney(-remain)+' đ</b>')+'</span>'+
+      (remain>0.005 && v.partnerId ? '<button class="btn btn-sm btn-success" onclick="closeModal();paymentForm(\''+((v.type==='out'||v.type==='return_sup')?'receipt':'payment')+'\',\''+v.partnerId+'\','+remain+')">💳 Ghi nhận thanh toán</button>' : '')+
+      '</div>';
+  }
   openModal({
     title:vt.icon+' '+vt.name+' — '+v.code, size:'lg',
     body: info+
@@ -282,7 +326,7 @@ function voucherDetail(id){
       (v.type==='out'?'<th class="r">Giá vốn</th><th class="r">Lợi nhuận</th>':'')+
       '</tr></thead><tbody>'+rows+'</tbody>'+
       (hasPrice?'<tfoot><tr><td colspan="4" class="r">TỔNG CỘNG</td><td></td><td class="r" style="color:var(--primary)">'+fmtMoney(v.total)+'</td>'+(v.type==='out'?'<td></td><td class="r '+(profit>=0?'num-pos':'num-neg')+'">'+fmtMoney(profit)+'</td>':'')+'</tr></tfoot>':'')+
-      '</table></div>',
+      '</table></div>'+payHTML,
     footer:
       '<button class="btn btn-ghost" onclick="closeModal()">Đóng</button>'+
       (isAdmin()?'<button class="btn btn-danger" onclick="askDeleteVoucher(\''+v.id+'\')">🗑️ Xóa phiếu</button>':'')+
@@ -353,7 +397,9 @@ function printVoucher(id){
     '</tr></thead><tbody>'+rows+
     (hasPrice?'<tr><td colspan="6" class="r"><b>TỔNG CỘNG</b></td><td class="r"><b>'+fmtMoney(v.total)+'</b></td></tr>':'')+
     '</tbody></table>'+
-    (hasPrice?'<div class="pv-words">Bằng chữ: <b>'+docSoTien(v.total)+'</b></div>':'<div style="height:12px"></div>')+
+    (hasPrice?'<div class="pv-words">Bằng chữ: <b>'+docSoTien(v.total)+'</b>'+
+      (isMoneyVoucher(v.type)&&voucherRemain(v)>0.005?'<br>Đã thanh toán: <b>'+fmtMoney((v.paid===undefined)?v.total:v.paid)+' đ</b> — Còn nợ: <b>'+fmtMoney(voucherRemain(v))+' đ</b>':'')+
+      '</div>':'<div style="height:12px"></div>')+
     '<div class="pv-sign">'+signs.map(function(sg){return '<div><b>'+sg+'</b><i>(Ký, họ tên)</i><div class="sp"></div></div>';}).join('')+'</div>'+
   '</div>';
   window.print();

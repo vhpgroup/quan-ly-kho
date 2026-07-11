@@ -22,7 +22,7 @@ function check(name, cond, extra){
 // ---- nạp các module (như các thẻ <script> chia sẻ global trên trình duyệt) ----
 const vm=require('vm');
 let bundle='';
-for(const f of ['10_core.js','20_engine.js','30_shell.js','40_catalog.js','50_vouchers.js','60_tracking.js','70_system.js']){
+for(const f of ['10_core.js','20_engine.js','30_shell.js','40_catalog.js','50_vouchers.js','55_finance.js','60_tracking.js','70_system.js']){
   bundle+=fs.readFileSync(__dirname+'/src/'+f,'utf-8').replace(/^'use strict';\s*/,'')+'\n';
 }
 vm.runInThisContext(bundle);
@@ -210,6 +210,97 @@ r=updateVoucher(vTr.id, {type:'transfer', date:'2026-07-10', warehouseId:'w1', t
 check('sửa phiếu chuyển giảm SL', r.ok, r.error);
 check('sửa chuyển: w1=18, w2=2', getStock('w1','pC')===18 && getStock('w2','pC')===2, getStock('w1','pC')+'/'+getStock('w2','pC'));
 
+// ================== 4d. Công nợ & phiếu thu chi ==================
+DB=defaultDB();
+SESSION=DB.users[0];
+DB.warehouses.push({id:'wD',code:'KD',name:'Kho D',active:true});
+const pD={id:'pD',sku:'D01',name:'Hàng D',unit:'cái',costPrice:0,salePrice:300,minStock:0,active:true};
+DB.products.push(pD);
+const sD={id:'sD',code:'NCCD',type:'supplier',name:'NCC Delta',active:true};
+const kD={id:'kD',code:'KHD',type:'customer',name:'Khách Delta',active:true};
+DB.partners.push(sD,kD);
+
+// nhập 10 @100 = 1000, trả trước 400 → nợ NCC 600
+let vInD=postVoucher({type:'in',date:'2026-07-01',warehouseId:'wD',partnerId:'sD',paid:400,lines:[{productId:'pD',qty:10,price:100}]}).voucher;
+check('nợ: phiếu nhập lưu paid=400', vInD.paid===400, vInD.paid);
+check('nợ: phải trả NCC = 600', partnerDebt('sD')===600, partnerDebt('sD'));
+check('nợ: paid âm bị chặn về 0', postVoucher({type:'in',date:'2026-07-01',warehouseId:'wD',partnerId:'sD',paid:-50,lines:[{productId:'pD',qty:1,price:100}]}).voucher.paid===0);
+check('nợ: phải trả NCC = 700 (thêm phiếu 100 chưa trả)', partnerDebt('sD')===700, partnerDebt('sD'));
+
+// phiếu chi trả NCC 500 → còn 200
+let rPay=postPayment({type:'payment',date:'2026-07-02',partnerId:'sD',amount:500,method:'bank',note:'trả nợ'});
+check('phiếu chi OK, mã PC00001', rPay.ok && rPay.payment.code==='PC00001', rPay.ok?rPay.payment.code:rPay.error);
+check('nợ: sau chi 500 còn 200', partnerDebt('sD')===200, partnerDebt('sD'));
+
+// validate phiếu thu/chi
+check('phiếu chi 0 đ bị chặn', !postPayment({type:'payment',partnerId:'sD',amount:0}).ok);
+check('phiếu chi thiếu đối tác bị chặn', !postPayment({type:'payment',partnerId:'khong-co',amount:100}).ok);
+check('loại phiếu sai bị chặn', !postPayment({type:'xxx',partnerId:'sD',amount:100}).ok);
+
+// trả hàng NCC 2 @100 = 200 (chưa nhận hoàn tiền) → hết nợ
+postVoucher({type:'return_sup',date:'2026-07-03',warehouseId:'wD',partnerId:'sD',paid:0,lines:[{productId:'pD',qty:2,price:100}]});
+check('nợ: trả hàng NCC 200 → hết nợ', partnerDebt('sD')===0, partnerDebt('sD'));
+
+// chi thừa cho NCC 150 → NCC giữ thừa của ta (nợ âm)
+let pmOver=postPayment({type:'payment',date:'2026-07-04',partnerId:'sD',amount:150,note:'chi nhầm'}).payment;
+check('nợ: chi thừa → -150', partnerDebt('sD')===-150, partnerDebt('sD'));
+check('tổng phải trả chỉ cộng số dương = 0', totalPayable()===0, totalPayable());
+
+// hủy phiếu chi thừa → về 0
+r=voidPayment(pmOver.id);
+check('hủy phiếu chi OK', r.ok, r.error);
+check('nợ: sau hủy phiếu chi về 0', partnerDebt('sD')===0, partnerDebt('sD'));
+check('hủy phiếu chi lần 2 bị chặn', !voidPayment(pmOver.id).ok);
+
+// khách: xuất 5 @300 = 1500, trả trước 500 → phải thu 1000
+let vOutD=postVoucher({type:'out',date:'2026-07-05',warehouseId:'wD',partnerId:'kD',paid:500,lines:[{productId:'pD',qty:5,price:300}]}).voucher;
+check('nợ: phải thu KH = 1000', partnerDebt('kD')===1000, partnerDebt('kD'));
+// phiếu thu 600 → còn 400
+postPayment({type:'receipt',date:'2026-07-06',partnerId:'kD',amount:600,note:'thu nợ'});
+check('nợ: sau thu 600 còn 400', partnerDebt('kD')===400, partnerDebt('kD'));
+check('mã phiếu thu PT00001', DB.payments.find(x=>x.type==='receipt').code==='PT00001');
+// khách trả hàng 1 @300 (chưa hoàn tiền) → còn 100
+postVoucher({type:'return_cus',date:'2026-07-07',warehouseId:'wD',partnerId:'kD',paid:0,lines:[{productId:'pD',qty:1,price:300}]});
+check('nợ: khách trả hàng 300 → còn phải thu 100', partnerDebt('kD')===100, partnerDebt('kD'));
+check('tổng phải thu = 100', totalReceivable()===100, totalReceivable());
+
+// sổ chi tiết: số dư cuối = công nợ hiện tại, chạy đúng lũy kế
+let stm=partnerStatement('kD');
+check('sổ chi tiết: 3 dòng phát sinh', stm.length===3, stm.length);
+check('sổ chi tiết: số dư cuối = 100', stm[stm.length-1].balance===100, stm[stm.length-1].balance);
+check('sổ chi tiết: lũy kế đúng (1000→400→100)', stm[0].balance===1000&&stm[1].balance===400&&stm[2].balance===100, stm.map(e=>e.balance));
+
+// sửa phiếu: đổi paid → công nợ cập nhật
+r=updateVoucher(vOutD.id,{type:'out',date:'2026-07-05',warehouseId:'wD',partnerId:'kD',paid:1500,lines:[{productId:'pD',qty:5,price:300}]});
+check('sửa phiếu đổi paid OK', r.ok, r.error);
+check('nợ: sau sửa paid đủ → phải thu -900+... = 100-1000 = -900', partnerDebt('kD')===-900, partnerDebt('kD'));
+
+// hủy phiếu xuất → phiếu void bị loại khỏi công nợ (delta phiếu này đã = 0 do paid đủ nên số dư giữ nguyên)
+voidVoucher(vOutD.id);
+check('nợ: hủy phiếu xuất → số dư = -900 (chỉ còn thu 600 + hàng trả 300)', partnerDebt('kD')===-900, partnerDebt('kD'));
+
+// debtSummary tổng hợp đúng
+let ds=debtSummary('supplier');
+let rowS=ds.find(x=>x.partner.id==='sD');
+check('debtSummary NCC: tổng mua 1100', rowS.gross===1100, rowS.gross);
+check('debtSummary NCC: trả hàng 200', rowS.returned===200, rowS.returned);
+check('debtSummary NCC: balance = 0', rowS.balance===0, rowS.balance);
+
+// xóa phiếu thu/chi
+const pmCount=DB.payments.length;
+r=deletePayment(pmOver.id);
+check('xóa phiếu chi (đã hủy) OK', r.ok && DB.payments.length===pmCount-1);
+check('xóa phiếu không tồn tại bị chặn', !deletePayment('khong-co').ok);
+
+// di trú dữ liệu cũ: phiếu có tiền thiếu paid → coi là đã TT đủ; chuyển kho → paid 0
+let legacy=migrateDB({users:[{}],products:[],vouchers:[
+  {type:'in',total:5000,partnerId:'x',status:'posted',lines:[]},
+  {type:'transfer',total:0,status:'posted',lines:[]}
+]});
+check('di trú: phiếu nhập cũ paid=total', legacy.vouchers[0].paid===5000, legacy.vouchers[0].paid);
+check('di trú: chuyển kho paid=0', legacy.vouchers[1].paid===0);
+check('di trú: có mảng payments', Array.isArray(legacy.payments));
+
 // ================== 5. Seed demo ==================
 DB=defaultDB();
 SESSION=null;
@@ -218,6 +309,12 @@ check('seed: 8 sản phẩm', DB.products.length===8, DB.products.length);
 check('seed: 7 phiếu', DB.vouchers.length===7, DB.vouchers.length);
 check('seed: 3 người dùng', DB.users.length===3);
 check('seed: có cờ demo', DB.meta.demo===true);
+check('seed: 2 phiếu thu chi', DB.payments.length===2, DB.payments.length);
+const sNCC1=DB.partners.find(p=>p.code==='NCC001'), sKH1=DB.partners.find(p=>p.code==='KH001');
+check('seed: còn phải trả NCC001 = 1.000.000', partnerDebt(sNCC1.id)===1000000, partnerDebt(sNCC1.id));
+check('seed: còn phải thu KH001 = 100.000', partnerDebt(sKH1.id)===100000, partnerDebt(sKH1.id));
+check('seed: tổng phải thu = 100.000', totalReceivable()===100000, totalReceivable());
+check('seed: tổng phải trả = 1.000.000', totalPayable()===1000000, totalPayable());
 const g=(sku)=>DB.products.find(p=>p.sku===sku);
 const wh1=DB.warehouses[0], wh2=DB.warehouses[1];
 check('seed: VPP001 tồn KHO01=25', getStock(wh1.id,g('VPP001').id)===25, getStock(wh1.id,g('VPP001').id));
