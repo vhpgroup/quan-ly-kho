@@ -90,9 +90,10 @@ function headerMap(headers, defs){
 
 /* ---------- Xuất / nhập SẢN PHẨM ---------- */
 function exportProducts(){
-  var rows=[['Mã hàng','Tên hàng','Hãng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Tổng tồn','Ghi chú','Trạng thái']];
+  var rows=[['Mã hàng','Tên hàng','Hãng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Tổng tồn','Tồn theo kho','Ghi chú','Trạng thái']];
   DB.products.forEach(function(p){
-    rows.push([p.sku, p.name, p.brand||'', catName(p.categoryId), p.unit, p.costPrice||0, p.salePrice||0, p.minStock||0, totalStock(p.id), p.note||'', p.active===false?'Ngừng KD':'Đang bán']);
+    var bd=activeWarehouses().map(function(w){ var s=getStock(w.id,p.id); return s>0?(w.name+': '+fmtQty(s)):null; }).filter(function(x){return x;}).join(' · ');
+    rows.push([p.sku, p.name, p.brand||'', catName(p.categoryId), p.unit, p.costPrice||0, p.salePrice||0, p.minStock||0, totalStock(p.id), bd, p.note||'', p.active===false?'Ngừng KD':'Đang bán']);
   });
   xlsxExport('danh-sach-san-pham-'+todayStr(), [{name:'SanPham', rows:rows}]);
 }

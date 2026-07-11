@@ -36,8 +36,20 @@ function partnerColLabel(types){
   }
   return 'Đối tác';
 }
-function voucherTable(types, limit){
-  var list=DB.vouchers.filter(function(v){ return types.indexOf(v.type)>=0; }).slice(0,limit||30);
+/* Bộ lọc kho cho danh sách phiếu (Xuất / Chuyển / Trả hàng) */
+var VLF={wh:''};
+function vlWhOptions(){
+  if(VLF.wh && !whById(VLF.wh)) VLF.wh='';
+  var html='<option value="">🏢 Tổng kho — tất cả</option>';
+  activeWarehouses().forEach(function(w){ html+='<option value="'+w.id+'" '+(VLF.wh===w.id?'selected':'')+'>'+esc(w.name)+'</option>'; });
+  return html;
+}
+function voucherTable(types, limit, whId){
+  var list=DB.vouchers.filter(function(v){
+    if(types.indexOf(v.type)<0) return false;
+    if(whId && v.warehouseId!==whId && v.toWarehouseId!==whId) return false;
+    return true;
+  }).slice(0,limit||30);
   var rows=list.map(function(v){
     var vt=VTYPES[v.type];
     var isVoid=v.status==='void';
@@ -61,11 +73,13 @@ function voucherTable(types, limit){
 }
 function bizPage(c, type, introHTML){
   var vt=VTYPES[type];
+  var showWh=type!=='in'; // nhập kho luôn ghi rõ kho trên từng phiếu — không cần bộ lọc
   c.innerHTML=
     '<div class="toolbar">'+
-      '<div class="grow" style="font-size:13px;color:var(--muted)">'+(introHTML||'')+'</div>'+
+      (showWh?'<div class="field"><label>Kho</label><select onchange="VLF.wh=this.value;refreshPage()">'+vlWhOptions()+'</select></div>':'')+
+      '<div class="grow" style="font-size:13px;color:var(--muted);padding-bottom:8px">'+(introHTML||'')+'</div>'+
       '<div class="toolbar-right"><button class="btn btn-primary" onclick="openVoucherForm(\''+type+'\')">＋ Tạo '+vt.name.toLowerCase()+'</button></div>'+
-    '</div>'+voucherTable([type]);
+    '</div>'+voucherTable([type], 30, showWh?VLF.wh:null);
 }
 RENDERERS.stockin=function(c){ bizPage(c,'in','Ghi nhận hàng hóa nhập vào kho từ nhà cung cấp. Giá vốn được cập nhật tự động theo bình quân gia quyền.'); };
 RENDERERS.stockout=function(c){ bizPage(c,'out','Ghi nhận hàng xuất bán / xuất sử dụng. Hệ thống tự kiểm tra tồn kho và chốt giá vốn để tính lợi nhuận.'); };
@@ -80,9 +94,10 @@ RENDERERS.returns=function(c){
       '<div class="tab '+(t==='return_cus'?'active':'')+'" onclick="RETF.tab=\'return_cus\';refreshPage()">♻️ Khách trả hàng</div>'+
     '</div>'+
     '<div class="toolbar">'+
-      '<div class="grow" style="font-size:13px;color:var(--muted)">'+(t==='return_sup'?'Xuất trả hàng lỗi/thừa cho nhà cung cấp — giảm tồn kho.':'Nhận lại hàng khách trả — tăng tồn kho, trừ doanh thu trong báo cáo lợi nhuận.')+'</div>'+
+      '<div class="field"><label>Kho</label><select onchange="VLF.wh=this.value;refreshPage()">'+vlWhOptions()+'</select></div>'+
+      '<div class="grow" style="font-size:13px;color:var(--muted);padding-bottom:8px">'+(t==='return_sup'?'Xuất trả hàng lỗi/thừa cho nhà cung cấp — giảm tồn kho.':'Nhận lại hàng khách trả — tăng tồn kho, trừ doanh thu trong báo cáo lợi nhuận.')+'</div>'+
       '<div class="toolbar-right"><button class="btn btn-primary" onclick="openVoucherForm(\''+t+'\')">＋ Tạo phiếu '+(t==='return_sup'?'trả NCC':'khách trả')+'</button></div>'+
-    '</div>'+voucherTable([t]);
+    '</div>'+voucherTable([t], 30, VLF.wh);
 };
 
 /* ---------- FORM LẬP PHIẾU ---------- */

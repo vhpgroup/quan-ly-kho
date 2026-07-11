@@ -2,12 +2,28 @@
 /* ==================== DANH MỤC: SẢN PHẨM / ĐỐI TÁC / KHO / NGƯỜI DÙNG ==================== */
 
 /* ---------- SẢN PHẨM ---------- */
-var PRODF={q:'', cat:'', showInactive:false};
+var PRODF={q:'', cat:'', wh:'', showInactive:false};
+function prodWhOptions(){
+  if(PRODF.wh && !whById(PRODF.wh)) PRODF.wh='';
+  var html='<option value="">🏢 Tổng kho — tất cả</option>';
+  activeWarehouses().forEach(function(w){ html+='<option value="'+w.id+'" '+(PRODF.wh===w.id?'selected':'')+'>'+esc(w.name)+'</option>'; });
+  return html;
+}
+/* Tồn từng kho của 1 sản phẩm, dạng "Kho chính: 25 · Chi nhánh: 5" */
+function prodWhBreakdown(pid){
+  var parts=[];
+  activeWarehouses().forEach(function(w){
+    var s=getStock(w.id, pid);
+    if(s>0) parts.push(esc(w.name)+': <b>'+fmtQty(s)+'</b>');
+  });
+  return parts.length?'<span class="small">'+parts.join(' <span style="color:var(--muted2)">·</span> ')+'</span>':'<span style="color:var(--muted2)">—</span>';
+}
 RENDERERS.products=function(c){
   var mgr=isMgr();
   c.innerHTML=
   '<div class="toolbar">'+
     '<div class="field grow"><label>Tìm kiếm</label><input id="pf-q" placeholder="Tên, mã hoặc hãng…" value="'+esc(PRODF.q)+'"></div>'+
+    '<div class="field"><label>Kho</label><select id="pf-wh" onchange="PRODF.wh=this.value;refreshPage()">'+prodWhOptions()+'</select></div>'+
     '<div class="field"><label>Nhóm hàng</label><select id="pf-cat" onchange="prodFilter()">'+catOptions(PRODF.cat,true)+'</select></div>'+
     '<div class="field"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;font-weight:500;margin:0;padding:8px 0"><input type="checkbox" id="pf-inactive" '+(PRODF.showInactive?'checked':'')+' onchange="prodFilter()"> Hiện hàng ngừng KD</label></div>'+
     '<div class="toolbar-right">'+
@@ -18,7 +34,7 @@ RENDERERS.products=function(c){
     '</div>'+
   '</div>'+
   '<div class="tbl-wrap tbl-scroll"><table class="tbl"><thead><tr>'+
-    '<th>Mã</th><th>Tên sản phẩm</th><th>Hãng</th><th>Nhóm</th><th>ĐVT</th><th class="r">Giá vốn</th><th class="r">Giá bán</th><th class="r">Tổng tồn</th><th class="r">Tồn min</th><th class="c">Trạng thái</th>'+(mgr?'<th class="c">Thao tác</th>':'')+
+    '<th>Mã</th><th>Tên sản phẩm</th><th>Hãng</th><th>Nhóm</th><th>ĐVT</th><th class="r">Giá vốn</th><th class="r">Giá bán</th><th class="r">Tổng tồn</th><th'+(PRODF.wh?' class="r"':'')+'>'+(PRODF.wh?'Tồn tại '+esc(whName(PRODF.wh)):'Tồn theo kho')+'</th><th class="r">Tồn min</th><th class="c">Trạng thái</th>'+(mgr?'<th class="c">Thao tác</th>':'')+
   '</tr></thead><tbody id="prod-tbody"></tbody></table></div>'+
   '<div class="pagin" id="prod-count"></div>';
   $('#pf-q').addEventListener('input', prodFilter);
@@ -39,6 +55,7 @@ function prodRows(){
   var list=DB.products.filter(function(p){
     if(!PRODF.showInactive && p.active===false) return false;
     if(PRODF.cat && p.categoryId!==PRODF.cat) return false;
+    if(PRODF.wh && getStock(PRODF.wh, p.id)<=0) return false;
     if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     return true;
   }).sort(function(a,b){ return a.sku.localeCompare(b.sku,'vi'); });
@@ -55,13 +72,14 @@ function prodRows(){
       '<td class="r">'+fmtMoney(p.costPrice)+'</td>'+
       '<td class="r">'+fmtMoney(p.salePrice)+'</td>'+
       '<td class="r '+(low?'low-flag':'')+'">'+fmtQty(ts)+(low?' ⚠️':'')+'</td>'+
+      '<td'+(PRODF.wh?' class="r"':'')+'>'+(PRODF.wh?'<b>'+fmtQty(getStock(PRODF.wh,p.id))+'</b>':prodWhBreakdown(p.id))+'</td>'+
       '<td class="r muted">'+(p.minStock?fmtQty(p.minStock):'—')+'</td>'+
       '<td class="c">'+(p.active===false?'<span class="tag tag-gray">Ngừng KD</span>':'<span class="tag tag-green">Đang bán</span>')+'</td>'+
       (mgr?'<td class="c" style="white-space:nowrap"><button class="btn btn-xs btn-ghost" onclick="productForm(\''+p.id+'\')">Sửa</button> <button class="btn btn-xs btn-danger" onclick="deleteProduct(\''+p.id+'\')">Xóa</button></td>':'')+
     '</tr>';
   }).join('');
-  $('#prod-tbody').innerHTML=html||'<tr><td colspan="11"><div class="empty">Chưa có sản phẩm nào. '+(mgr?'Bấm “＋ Thêm sản phẩm” hoặc “Nhập Excel” để bắt đầu.':'')+'</div></td></tr>';
-  $('#prod-count').textContent='Hiển thị '+shown.length+' / '+list.length+' sản phẩm';
+  $('#prod-tbody').innerHTML=html||'<tr><td colspan="12"><div class="empty">'+(PRODF.wh?'Không có sản phẩm nào còn tồn tại '+esc(whName(PRODF.wh))+'.':'Chưa có sản phẩm nào. '+(mgr?'Bấm “＋ Thêm sản phẩm” hoặc “Nhập Excel” để bắt đầu.':''))+'</div></td></tr>';
+  $('#prod-count').textContent='Hiển thị '+shown.length+' / '+list.length+' sản phẩm'+(PRODF.wh?' còn tồn tại '+whName(PRODF.wh):'');
 }
 function productForm(id){
   if(!isMgr()) return;
