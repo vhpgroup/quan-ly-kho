@@ -141,11 +141,11 @@ function vfBindSearch(){
     if(!q){ dd.classList.add('hidden'); return; }
     var whId=$('#vf-wh').value;
     var list=activeProducts().filter(function(p){
-      return normStr(p.name).indexOf(q)>=0 || normStr(p.sku).indexOf(q)>=0;
+      return normStr(p.name).indexOf(q)>=0 || normStr(p.sku).indexOf(q)>=0 || normStr(p.brand).indexOf(q)>=0;
     }).slice(0,8);
     dd.innerHTML=list.length?list.map(function(p){
       var st=vfNeedsStock(VF.type)?getStock(whId,p.id):totalStock(p.id);
-      return '<div class="dd-item" onmousedown="vfPick(\''+p.id+'\')"><div><b>'+esc(p.name)+'</b> <span class="muted small">· '+esc(p.sku)+'</span></div><div class="muted small">Tồn: '+fmtQty(st)+' '+esc(p.unit)+'</div></div>';
+      return '<div class="dd-item" onmousedown="vfPick(\''+p.id+'\')"><div><b>'+esc(p.name)+'</b> <span class="muted small">· '+esc(p.sku)+(p.brand?' · '+esc(p.brand):'')+'</span></div><div class="muted small">Tồn: '+fmtQty(st)+' '+esc(p.unit)+'</div></div>';
     }).join(''):'<div class="dd-empty">Không tìm thấy sản phẩm phù hợp</div>';
     dd.classList.remove('hidden');
   });
@@ -388,7 +388,7 @@ function stRows(){
   var q=normStr(ST.q);
   var list=activeProducts().filter(function(p){
     if(ST.onlyStock && getStock(ST.whId,p.id)<=0 && ST.counts[p.id]===undefined) return false;
-    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0) return false;
+    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     return true;
   }).sort(function(a,b){return a.sku.localeCompare(b.sku,'vi');}).slice(0,400);
   var html=list.map(function(p){

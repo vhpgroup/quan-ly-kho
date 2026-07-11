@@ -75,13 +75,14 @@ function readSheetFile(f, cb){
 }
 function headerMap(headers, defs){
   // defs: [{key, match:[chuỗi đã normStr]}] → trả {key: colIndex}
+  // match bắt đầu bằng '=' nghĩa là so khớp CHÍNH XÁC (tránh trùng chuỗi con, VD '=hang' không khớp 'ma hang')
   var map={};
   headers.forEach(function(h,i){
     var n=normStr(h);
     if(!n) return;
     defs.forEach(function(d){
       if(map[d.key]!==undefined) return;
-      if(d.match.some(function(m){ return n===m || n.indexOf(m)>=0; })) map[d.key]=i;
+      if(d.match.some(function(m){ return m.charAt(0)==='=' ? n===m.slice(1) : (n===m || n.indexOf(m)>=0); })) map[d.key]=i;
     });
   });
   return map;
@@ -89,9 +90,9 @@ function headerMap(headers, defs){
 
 /* ---------- Xuất / nhập SẢN PHẨM ---------- */
 function exportProducts(){
-  var rows=[['Mã hàng','Tên hàng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Tổng tồn','Ghi chú','Trạng thái']];
+  var rows=[['Mã hàng','Tên hàng','Hãng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Tổng tồn','Ghi chú','Trạng thái']];
   DB.products.forEach(function(p){
-    rows.push([p.sku, p.name, catName(p.categoryId), p.unit, p.costPrice||0, p.salePrice||0, p.minStock||0, totalStock(p.id), p.note||'', p.active===false?'Ngừng KD':'Đang bán']);
+    rows.push([p.sku, p.name, p.brand||'', catName(p.categoryId), p.unit, p.costPrice||0, p.salePrice||0, p.minStock||0, totalStock(p.id), p.note||'', p.active===false?'Ngừng KD':'Đang bán']);
   });
   xlsxExport('danh-sach-san-pham-'+todayStr(), [{name:'SanPham', rows:rows}]);
 }
@@ -101,7 +102,7 @@ function importProducts(){
     title:'Nhập sản phẩm từ Excel', size:'md',
     body:
       '<div style="font-size:13.5px;line-height:1.8">File Excel/CSV cần dòng đầu là tiêu đề cột, gồm:<br>'+
-      '<b>Mã hàng</b> (bắt buộc) · <b>Tên hàng</b> (bắt buộc) · Nhóm hàng · Đơn vị · Giá vốn · Giá bán · Tồn tối thiểu · Ghi chú<br>'+
+      '<b>Mã hàng</b> (bắt buộc) · <b>Tên hàng</b> (bắt buộc) · Hãng · Nhóm hàng · Đơn vị · Giá vốn · Giá bán · Tồn tối thiểu · Ghi chú<br>'+
       '<span class="muted">— Mã đã tồn tại sẽ được <b>cập nhật</b>, mã mới sẽ được <b>thêm</b>. Nhóm hàng chưa có sẽ tự tạo.<br>— Tồn kho đầu kỳ không nhập ở đây: sau khi có danh mục, hãy tạo <b>Phiếu nhập kho</b> đầu kỳ để tồn và giá vốn được ghi sổ đúng.</span></div>',
     footer:
       '<button class="btn btn-ghost" onclick="downloadProductTemplate()">📄 Tải file mẫu</button>'+
@@ -110,9 +111,9 @@ function importProducts(){
 }
 function downloadProductTemplate(){
   xlsxExport('mau-nhap-san-pham', [{name:'SanPham', rows:[
-    ['Mã hàng','Tên hàng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Ghi chú'],
-    ['SP0001','Giấy A4 Double A','Văn phòng phẩm','ream',65000,75000,20,''],
-    ['SP0002','Bút bi xanh','Văn phòng phẩm','cây',3500,5000,50,'Ví dụ — xóa dòng này']
+    ['Mã hàng','Tên hàng','Hãng','Nhóm hàng','Đơn vị','Giá vốn','Giá bán','Tồn tối thiểu','Ghi chú'],
+    ['SP0001','Giấy A4 Double A','Double A','Văn phòng phẩm','ream',65000,75000,20,''],
+    ['SP0002','Bút bi xanh','Thiên Long','Văn phòng phẩm','cây',3500,5000,50,'Ví dụ — xóa dòng này']
   ]}]);
 }
 function doImportProducts(f){
@@ -121,6 +122,7 @@ function doImportProducts(f){
     var map=headerMap(aoa[0],[
       {key:'sku',  match:['ma hang','ma san pham','sku','ma']},
       {key:'name', match:['ten hang','ten san pham','ten']},
+      {key:'brand',match:['=hang','thuong hieu','hang sx','hang san xuat','nha san xuat','brand']},
       {key:'cat',  match:['nhom']},
       {key:'unit', match:['don vi','dvt']},
       {key:'cost', match:['gia von']},
@@ -148,6 +150,7 @@ function doImportProducts(f){
       var ex=DB.products.find(function(p){return p.sku.toUpperCase()===sku;});
       if(ex){
         ex.name=name;
+        if(map.brand!==undefined && String(r[map.brand]).trim()) ex.brand=String(r[map.brand]).trim();
         if(catId) ex.categoryId=catId;
         if(map.unit!==undefined && String(r[map.unit]).trim()) ex.unit=String(r[map.unit]).trim();
         if(map.sale!==undefined && String(r[map.sale]).trim()!=='') ex.salePrice=parseNum(r[map.sale]);
@@ -158,6 +161,7 @@ function doImportProducts(f){
       } else {
         DB.products.push({
           id:uid(), sku:sku, name:name, categoryId:catId,
+          brand:map.brand!==undefined?String(r[map.brand]).trim():'',
           unit:map.unit!==undefined&&String(r[map.unit]).trim()?String(r[map.unit]).trim():'cái',
           costPrice:map.cost!==undefined?parseNum(r[map.cost]):0,
           salePrice:map.sale!==undefined?parseNum(r[map.sale]):0,
@@ -242,11 +246,11 @@ function doImportPartners(f){
 /* ---------- Xuất TỒN KHO / LỊCH SỬ / BÁO CÁO ---------- */
 function exportInventory(){
   var whs=activeWarehouses();
-  var head=['Mã','Tên sản phẩm','ĐVT'].concat(whs.map(function(w){return 'Tồn '+w.name;})).concat(['Tổng tồn','Giá vốn','Giá trị tồn','Tồn tối thiểu']);
+  var head=['Mã','Tên sản phẩm','Hãng','ĐVT'].concat(whs.map(function(w){return 'Tồn '+w.name;})).concat(['Tổng tồn','Giá vốn','Giá trị tồn','Tồn tối thiểu']);
   var rows=[head];
   invRowsData().forEach(function(p){
     var tot=totalStock(p.id);
-    rows.push([p.sku,p.name,p.unit].concat(whs.map(function(w){return getStock(w.id,p.id);})).concat([tot,p.costPrice||0,Math.round(tot*(p.costPrice||0)),p.minStock||0]));
+    rows.push([p.sku,p.name,p.brand||'',p.unit].concat(whs.map(function(w){return getStock(w.id,p.id);})).concat([tot,p.costPrice||0,Math.round(tot*(p.costPrice||0)),p.minStock||0]));
   });
   xlsxExport('ton-kho-'+todayStr(), [{name:'TonKho', rows:rows}]);
 }
@@ -468,18 +472,18 @@ function seedDemo(){
   SESSION={username:'admin'};
   var catVPP={id:uid(),name:'Văn phòng phẩm'}, catDT={id:uid(),name:'Thiết bị điện tử'}, catDG={id:uid(),name:'Vật tư đóng gói'};
   DB.categories.push(catVPP,catDT,catDG);
-  function mkP(sku,name,cat,unit,sale,min){
-    var p={id:uid(),sku:sku,name:name,categoryId:cat.id,unit:unit,costPrice:0,salePrice:sale,minStock:min,note:'',active:true,createdAt:nowISO()};
+  function mkP(sku,name,cat,unit,sale,min,brand){
+    var p={id:uid(),sku:sku,name:name,brand:brand||'',categoryId:cat.id,unit:unit,costPrice:0,salePrice:sale,minStock:min,note:'',active:true,createdAt:nowISO()};
     DB.products.push(p); return p;
   }
-  var p1=mkP('VPP001','Giấy A4 Double A 70gsm',catVPP,'ream',75000,20);
-  var p2=mkP('VPP002','Bút bi Thiên Long TL-027',catVPP,'cây',5000,50);
-  var p3=mkP('VPP003','Sổ tay A5 200 trang',catVPP,'quyển',22000,30);
-  var p4=mkP('DT001','Chuột Logitech B100',catDT,'cái',220000,5);
-  var p5=mkP('DT002','Bàn phím Dareu LK185',catDT,'cái',300000,20);
-  var p6=mkP('DT003','Ổ cắm Điện Quang 4 lỗ',catDT,'cái',125000,30);
-  var p7=mkP('DG001','Thùng carton 60x40x40',catDG,'cái',15000,100);
-  var p8=mkP('DG002','Băng keo trong 5cm',catDG,'cuộn',12000,200);
+  var p1=mkP('VPP001','Giấy A4 Double A 70gsm',catVPP,'ream',75000,20,'Double A');
+  var p2=mkP('VPP002','Bút bi Thiên Long TL-027',catVPP,'cây',5000,50,'Thiên Long');
+  var p3=mkP('VPP003','Sổ tay A5 200 trang',catVPP,'quyển',22000,30,'');
+  var p4=mkP('DT001','Chuột Logitech B100',catDT,'cái',220000,5,'Logitech');
+  var p5=mkP('DT002','Bàn phím Dareu LK185',catDT,'cái',300000,20,'Dareu');
+  var p6=mkP('DT003','Ổ cắm Điện Quang 4 lỗ',catDT,'cái',125000,30,'Điện Quang');
+  var p7=mkP('DG001','Thùng carton 60x40x40',catDG,'cái',15000,100,'');
+  var p8=mkP('DG002','Băng keo trong 5cm',catDG,'cuộn',12000,200,'');
   var w1={id:uid(),code:'KHO01',name:'Kho chính',address:'Số 12 Nguyễn Văn Cừ, Q.5, TP.HCM',active:true};
   var w2={id:uid(),code:'KHO02',name:'Kho chi nhánh',address:'88 Lê Lợi, Hải Châu, Đà Nẵng',active:true};
   DB.warehouses.push(w1,w2);

@@ -7,7 +7,7 @@ RENDERERS.inventory=function(c){
   var whs=activeWarehouses();
   c.innerHTML=
   '<div class="toolbar">'+
-    '<div class="field grow"><label>Tìm kiếm</label><input id="inv-q" placeholder="Tên hoặc mã sản phẩm…" value="'+esc(INVF.q)+'"></div>'+
+    '<div class="field grow"><label>Tìm kiếm</label><input id="inv-q" placeholder="Tên, mã hoặc hãng…" value="'+esc(INVF.q)+'"></div>'+
     '<div class="field"><label>Nhóm hàng</label><select id="inv-cat" onchange="invFilter()">'+catOptions(INVF.cat,true)+'</select></div>'+
     '<div class="field"><label>Kho</label><select id="inv-wh" onchange="invFilter()"><option value="">— Tất cả các kho —</option>'+whs.map(function(w){return '<option value="'+w.id+'" '+(INVF.wh===w.id?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
     '<div class="field"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;font-weight:500;margin:0;padding:8px 0"><input type="checkbox" id="inv-low" '+(INVF.lowOnly?'checked':'')+' onchange="invFilter()"> ⚠️ Chỉ hàng dưới tồn tối thiểu</label></div>'+
@@ -26,7 +26,7 @@ function invRowsData(){
   return DB.products.filter(function(p){
     if(p.active===false && totalStock(p.id)<=0) return false;
     if(INVF.cat && p.categoryId!==INVF.cat) return false;
-    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0) return false;
+    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     if(INVF.lowOnly && !((p.minStock||0)>0 && totalStock(p.id)<p.minStock)) return false;
     return true;
   }).sort(function(a,b){return a.sku.localeCompare(b.sku,'vi');});
@@ -43,7 +43,7 @@ function invTable(){
     var low=(p.minStock||0)>0 && tot<p.minStock;
     return '<tr>'+
       '<td><b>'+esc(p.sku)+'</b></td>'+
-      '<td>'+esc(p.name)+(p.active===false?' <span class="tag tag-gray">Ngừng KD</span>':'')+'</td>'+
+      '<td>'+esc(p.name)+(p.active===false?' <span class="tag tag-gray">Ngừng KD</span>':'')+(p.brand?'<div class="small muted">'+esc(p.brand)+'</div>':'')+'</td>'+
       '<td class="c">'+esc(p.unit)+'</td>'+
       (showAll?whs.map(function(w){ var s=getStock(w.id,p.id); return '<td class="r'+(s?'':' muted')+'">'+(s?fmtQty(s):'·')+'</td>'; }).join(''):'')+
       '<td class="r"><b class="'+(low?'low-flag':'')+'">'+fmtQty(qty)+(low?' ⚠️':'')+'</b></td>'+

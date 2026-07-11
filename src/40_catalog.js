@@ -7,7 +7,7 @@ RENDERERS.products=function(c){
   var mgr=isMgr();
   c.innerHTML=
   '<div class="toolbar">'+
-    '<div class="field grow"><label>Tìm kiếm</label><input id="pf-q" placeholder="Tên hoặc mã sản phẩm…" value="'+esc(PRODF.q)+'"></div>'+
+    '<div class="field grow"><label>Tìm kiếm</label><input id="pf-q" placeholder="Tên, mã hoặc hãng…" value="'+esc(PRODF.q)+'"></div>'+
     '<div class="field"><label>Nhóm hàng</label><select id="pf-cat" onchange="prodFilter()">'+catOptions(PRODF.cat,true)+'</select></div>'+
     '<div class="field"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;font-weight:500;margin:0;padding:8px 0"><input type="checkbox" id="pf-inactive" '+(PRODF.showInactive?'checked':'')+' onchange="prodFilter()"> Hiện hàng ngừng KD</label></div>'+
     '<div class="toolbar-right">'+
@@ -18,7 +18,7 @@ RENDERERS.products=function(c){
     '</div>'+
   '</div>'+
   '<div class="tbl-wrap tbl-scroll"><table class="tbl"><thead><tr>'+
-    '<th>Mã</th><th>Tên sản phẩm</th><th>Nhóm</th><th>ĐVT</th><th class="r">Giá vốn</th><th class="r">Giá bán</th><th class="r">Tổng tồn</th><th class="r">Tồn min</th><th class="c">Trạng thái</th>'+(mgr?'<th class="c">Thao tác</th>':'')+
+    '<th>Mã</th><th>Tên sản phẩm</th><th>Hãng</th><th>Nhóm</th><th>ĐVT</th><th class="r">Giá vốn</th><th class="r">Giá bán</th><th class="r">Tổng tồn</th><th class="r">Tồn min</th><th class="c">Trạng thái</th>'+(mgr?'<th class="c">Thao tác</th>':'')+
   '</tr></thead><tbody id="prod-tbody"></tbody></table></div>'+
   '<div class="pagin" id="prod-count"></div>';
   $('#pf-q').addEventListener('input', prodFilter);
@@ -39,7 +39,7 @@ function prodRows(){
   var list=DB.products.filter(function(p){
     if(!PRODF.showInactive && p.active===false) return false;
     if(PRODF.cat && p.categoryId!==PRODF.cat) return false;
-    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0) return false;
+    if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     return true;
   }).sort(function(a,b){ return a.sku.localeCompare(b.sku,'vi'); });
   var shown=list.slice(0,400);
@@ -49,6 +49,7 @@ function prodRows(){
     return '<tr>'+
       '<td><b>'+esc(p.sku)+'</b></td>'+
       '<td>'+esc(p.name)+(p.note?'<div class="small muted">'+esc(p.note)+'</div>':'')+'</td>'+
+      '<td>'+(p.brand?esc(p.brand):'<span style="color:var(--muted2)">—</span>')+'</td>'+
       '<td>'+(p.categoryId?'<span class="tag">'+esc(catName(p.categoryId))+'</span>':'')+'</td>'+
       '<td>'+esc(p.unit)+'</td>'+
       '<td class="r">'+fmtMoney(p.costPrice)+'</td>'+
@@ -59,7 +60,7 @@ function prodRows(){
       (mgr?'<td class="c" style="white-space:nowrap"><button class="btn btn-xs btn-ghost" onclick="productForm(\''+p.id+'\')">Sửa</button> <button class="btn btn-xs btn-danger" onclick="deleteProduct(\''+p.id+'\')">Xóa</button></td>':'')+
     '</tr>';
   }).join('');
-  $('#prod-tbody').innerHTML=html||'<tr><td colspan="10"><div class="empty">Chưa có sản phẩm nào. '+(mgr?'Bấm “＋ Thêm sản phẩm” hoặc “Nhập Excel” để bắt đầu.':'')+'</div></td></tr>';
+  $('#prod-tbody').innerHTML=html||'<tr><td colspan="11"><div class="empty">Chưa có sản phẩm nào. '+(mgr?'Bấm “＋ Thêm sản phẩm” hoặc “Nhập Excel” để bắt đầu.':'')+'</div></td></tr>';
   $('#prod-count').textContent='Hiển thị '+shown.length+' / '+list.length+' sản phẩm';
 }
 function productForm(id){
@@ -72,6 +73,7 @@ function productForm(id){
     '<div class="form-grid">'+
       '<div class="field"><label>Mã sản phẩm (SKU) <span class="req">*</span></label><input id="prf-sku" value="'+esc(p?p.sku:suggestSku())+'"></div>'+
       '<div class="field"><label>Tên sản phẩm <span class="req">*</span></label><input id="prf-name" value="'+esc(p?p.name:'')+'"></div>'+
+      '<div class="field"><label>Hãng / Thương hiệu</label><input id="prf-brand" value="'+esc(p?p.brand:'')+'" placeholder="Logitech, Thiên Long…"></div>'+
       '<div class="field"><label>Nhóm hàng</label><select id="prf-cat">'+catOptions(p?p.categoryId:'')+'</select></div>'+
       '<div class="field"><label>Đơn vị tính <span class="req">*</span></label><input id="prf-unit" value="'+esc(p?p.unit:'cái')+'" placeholder="cái, hộp, kg…"></div>'+
       '<div class="field"><label>Giá vốn (đ)'+(hasStock&&!isAdmin()?' <span class="small muted">(tự động theo BQGQ)</span>':'')+'</label><input type="number" min="0" step="any" id="prf-cost" value="'+(p?p.costPrice||0:0)+'" '+(hasStock&&!isAdmin()?'disabled':'')+'></div>'+
@@ -99,6 +101,7 @@ function saveProduct(id){
   var costEl=$('#prf-cost');
   var data={
     sku:sku, name:name, unit:unit,
+    brand:($('#prf-brand').value||'').trim(),
     categoryId:$('#prf-cat').value||null,
     salePrice:parseNum($('#prf-sale').value),
     minStock:parseNum($('#prf-min').value),
