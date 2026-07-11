@@ -21,6 +21,8 @@ Phần mềm quản lý kho nội bộ cho công ty — **web app một file duy
 - **Nghiệp vụ phiếu**: nhập kho · xuất kho · chuyển kho · trả hàng NCC · khách trả hàng · kiểm kê & điều chỉnh — mỗi phiếu có số chứng từ tự động, in được (kèm số tiền bằng chữ, khung ký tên)
 - **Sửa / Hủy / Xóa phiếu**: sửa phiếu tính lại tồn kho đúng (có rollback nếu dữ liệu mới không hợp lệ); hủy giữ dấu vết sổ sách; xóa vĩnh viễn (chỉ Quản trị) hoàn tác tồn trước khi gỡ
 - **Công nợ & thu chi**: ghi "đã thanh toán" ngay trên phiếu nhập/xuất/trả hàng · phiếu thu (PT) / phiếu chi (PC) in được · sổ chi tiết công nợ từng đối tác có số dư lũy kế · báo cáo còn phải thu / phải trả (xuất Excel)
+- **An toàn số liệu**: chặn giá âm ngay từ engine · mã phiếu chống trùng kể cả khi dữ liệu đếm số bị hỏng · tiện ích **Tính lại giá vốn toàn bộ** (replay mọi phiếu theo trình tự thời gian, dùng sau khi sửa/hủy phiếu nhập cũ) · giá vốn hàng khách trả nhập tay được khi biết giá vốn gốc lúc bán
+- **Tác nghiệp nhanh**: kho làm việc mặc định theo tài khoản · nút **Chuyển kho nhanh** ngay tại cảnh báo thiếu tồn · Enter nhảy ô kế tiếp khi kiểm kê · Ctrl+Enter lưu phiếu · cảnh báo khi đổi kho giữa lúc lập phiếu
 - **Giá vốn bình quân gia quyền** tự cập nhật mỗi lần nhập; lợi nhuận chốt theo từng dòng xuất
 - **Tồn kho** theo từng kho + cảnh báo dưới tồn tối thiểu
 - **Báo cáo**: Nhập–Xuất–Tồn theo kỳ · Doanh thu & Lợi nhuận · Top sản phẩm — đều xuất Excel
@@ -57,7 +59,7 @@ Quy trình sửa code:
 
 ```bash
 # 1. Sửa các module trong src/
-# 2. Chạy kiểm thử (138 test: giá vốn, tồn kho, sửa/hủy/xóa phiếu, công nợ, báo cáo…)
+# 2. Chạy kiểm thử (160 test: giá vốn, tồn kho, sửa/hủy/xóa phiếu, công nợ, tính lại giá vốn, báo cáo…)
 node test_engine.js
 # 3. Ghép bản build mới
 python3 build.py
@@ -89,6 +91,6 @@ npm run dist:linux          # đóng gói Linux AppImage
 ## ⚠️ Lưu ý
 
 - Đây là bản **một máy / một trình duyệt** — nhiều người dùng chung dữ liệu thời gian thực cần bản nâng cấp server (Node.js + SQLite)
-- Hủy/xóa phiếu nhập không hồi tố giá vốn bình quân của các phiếu xuất đã lập trước đó
+- Hủy/xóa/sửa phiếu nhập không tự hồi tố giá vốn bình quân — khi cần chỉnh lại cho đúng, dùng **Sao lưu & Cài đặt → Tính lại giá vốn toàn bộ** (replay theo trình tự thời gian, tồn kho giữ nguyên)
 - Công nợ theo **đối tác** (không phân bổ theo từng hóa đơn); phiếu lập từ phiên bản cũ (trước khi có công nợ) được coi là **đã thanh toán đủ** khi nâng cấp dữ liệu
 - Hủy phiếu nhập/xuất sẽ loại toàn bộ phiếu (kể cả phần đã thanh toán) khỏi công nợ — nếu tiền đã thực trao, hãy lập phiếu thu/chi hoàn tiền tương ứng

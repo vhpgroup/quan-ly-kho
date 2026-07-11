@@ -507,8 +507,14 @@ function migrateDB(obj){
   obj.stocks=obj.stocks||{}; obj.vouchers=obj.vouchers||[]; obj.payments=obj.payments||[]; obj.auditLog=obj.auditLog||[]; obj.counters=obj.counters||{};
   // Di trú công nợ: phiếu có tiền lập trước khi có tính năng thanh toán (thiếu trường paid)
   // được coi là ĐÃ THANH TOÁN ĐỦ để công nợ khởi điểm bằng 0 (không hồi tố nợ cũ).
+  // Đồng thời vá dữ liệu hỏng: lines phải là mảng, total phải là số (tránh crash báo cáo).
   obj.vouchers.forEach(function(v){
+    if(!Array.isArray(v.lines)) v.lines=[];
+    if(typeof v.total!=='number' || !isFinite(v.total)) v.total=0;
     if(v.paid===undefined) v.paid=(v.type==='in'||v.type==='out'||v.type==='return_sup'||v.type==='return_cus') ? (v.total||0) : 0;
+  });
+  obj.payments.forEach(function(pm){
+    if(typeof pm.amount!=='number' || !isFinite(pm.amount)) pm.amount=0;
   });
   return obj;
 }
@@ -561,9 +567,14 @@ function stockValueTotal(){
   return v;
 }
 function nextCode(type){
-  var c=DB.counters[type]||1;
-  DB.counters[type]=c+1;
-  return VTYPES[type].code + String(c).padStart(5,'0');
+  // Chống trùng mã: kể cả khi DB.counters bị mất/hỏng, dò tiếp cho tới mã chưa tồn tại
+  var c=DB.counters[type]||1, code;
+  do{
+    code=VTYPES[type].code + String(c).padStart(5,'0');
+    c++;
+  }while(DB.vouchers.some(function(v){return v.code===code;}));
+  DB.counters[type]=c;
+  return code;
 }
 /* Phiếu có giá trị tiền với đối tác (tham gia công nợ) */
 function isMoneyVoucher(t){ return t==='in'||t==='out'||t==='return_sup'||t==='return_cus'; }
@@ -591,6 +602,15 @@ function validateVoucherInput(inp){
   });
   if(!lines.length) return {ok:false, error:'Phiếu phải có ít nhất một dòng hàng với số lượng hợp lệ'};
 
+  // Chặn đơn giá / giá vốn âm — giá âm phá giá vốn bình quân và mọi báo cáo phía sau
+  for(var li=0; li<lines.length; li++){
+    var lneg=lines[li];
+    if(parseNum(lneg.price)<0 || (lneg.costManual!==undefined && String(lneg.costManual)!=='' && parseNum(lneg.costManual)<0)){
+      var pneg=prodById(lneg.productId);
+      return {ok:false, error:'Đơn giá / giá vốn âm không hợp lệ ở dòng "'+(pneg?pneg.name:'?')+'"'};
+    }
+  }
+
   // Kiểm tra tồn cho các luồng xuất
   var need={};
   lines.forEach(function(l){
@@ -617,6 +637,7 @@ function applyVoucherLines(v, lines){
     var qty=round3(+l.qty);
     var price=round2(parseNum(l.price));
     var cost=round2(p.costPrice||0);
+    var manualCost=false;
 
     if(t==='in'){
       var tq=totalStock(p.id);
@@ -635,11 +656,19 @@ function applyVoucherLines(v, lines){
       if(!price) price=cost;
     } else if(t==='return_cus'){
       addStock(v.warehouseId, p.id, qty);
+      // Giá vốn hàng khách trả: mặc định là giá vốn bình quân hiện tại; Quản lý/Quản trị
+      // có thể nhập tay giá vốn gốc của lần bán để lợi nhuận không bị méo (đồng thuận hội đồng soát xét)
+      if(l.costManual!==undefined && String(l.costManual)!==''){
+        var mc=parseNum(l.costManual);
+        if(mc>=0){ cost=round2(mc); manualCost=true; }
+      }
     } else if(t==='adjust'){
       addStock(v.warehouseId, p.id, qty); // qty là chênh lệch +/-
       price=cost;
     }
-    v.lines.push({ productId:p.id, sku:p.sku, name:p.name, unit:p.unit, qty:qty, price:price, cost:cost });
+    var line={ productId:p.id, sku:p.sku, name:p.name, unit:p.unit, qty:qty, price:price, cost:cost };
+    if(manualCost) line.costManual=true;
+    v.lines.push(line);
     v.total=round2(v.total + qty*price);
   });
 }
@@ -763,6 +792,61 @@ function deleteVoucher(id){
   return {ok:true};
 }
 
+/* ---------- Tính lại giá vốn toàn bộ (replay theo trình tự thời gian) ----------
+ Dùng khi giá vốn bị lệch do sửa/hủy/xóa phiếu nhập trong quá khứ (BQGQ vốn không hồi tố).
+ Chỉ tính lại CHIỀU GIÁ TRỊ: costPrice sản phẩm + cost từng dòng phiếu (+ price/total của
+ phiếu kiểm kê vì giá trị điều chỉnh tính theo giá vốn). KHÔNG đụng số lượng tồn kho.
+ Giá vốn nhập tay trên phiếu khách trả (costManual) được tôn trọng, không ghi đè. */
+function recostAll(){
+  var vs=DB.vouchers.filter(function(v){return v.status!=='void';}).slice().sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date?-1:1;
+    return String(a.createdAt||'')<String(b.createdAt||'')?-1:1;
+  });
+  var sim={}; // pid -> {qty, cost} — trạng thái BQGQ toàn công ty mô phỏng theo dòng thời gian
+  function st(pid){ return sim[pid]||(sim[pid]={qty:0, cost:0}); }
+  var changedLines=0, changedProducts=0;
+  vs.forEach(function(v){
+    var newTotal=0;
+    v.lines.forEach(function(l){
+      var s=st(l.productId);
+      var c=round2(s.cost);
+      if(v.type==='in'){
+        var nq=round3(s.qty+l.qty);
+        s.cost = nq>0 ? round2(((s.qty*s.cost)+l.qty*l.price)/nq) : round2(l.price);
+        s.qty=nq;
+        if(l.cost!==s.cost){ l.cost=s.cost; changedLines++; }
+      } else if(v.type==='out'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty-l.qty);
+      } else if(v.type==='transfer'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+      } else if(v.type==='return_sup'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty-l.qty);
+      } else if(v.type==='return_cus'){
+        if(!l.costManual && l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty+l.qty);
+      } else if(v.type==='adjust'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        if(l.price!==c) l.price=c; // giá trị điều chỉnh kiểm kê tính theo giá vốn
+        s.qty=round3(s.qty+l.qty);
+      }
+      newTotal=round2(newTotal + l.qty*(l.price||0));
+    });
+    if(v.type==='adjust' && v.total!==newTotal) v.total=newTotal;
+  });
+  DB.products.forEach(function(p){
+    var s=sim[p.id];
+    if(s){
+      var nc=round2(s.cost);
+      if(p.costPrice!==nc){ p.costPrice=nc; changedProducts++; }
+    }
+  });
+  audit('Tính lại giá vốn toàn bộ', 'Cập nhật '+changedProducts+' sản phẩm, '+changedLines+' dòng phiếu (replay '+vs.length+' phiếu theo trình tự thời gian)');
+  saveDB();
+  return {ok:true, changedProducts:changedProducts, changedLines:changedLines, replayed:vs.length};
+}
+
 /* ==================== CÔNG NỢ & PHIẾU THU / CHI ====================
  Quy ước dấu (theo góc nhìn CỦA TA):
  - NCC   (phải trả): nhập +(total−paid) · trả hàng NCC −(total−paid) · phiếu chi −amount · phiếu thu +amount
@@ -771,9 +855,13 @@ function deleteVoucher(id){
  Phiếu đã hủy (status='void') không tính. paid trên phiếu trả hàng = tiền đã hoàn ngay khi trả. */
 function nextPayCode(type){
   var key='pay_'+type;
-  var c=DB.counters[key]||1;
-  DB.counters[key]=c+1;
-  return PTYPES[type].code + String(c).padStart(5,'0');
+  var c=DB.counters[key]||1, code;
+  do{
+    code=PTYPES[type].code + String(c).padStart(5,'0');
+    c++;
+  }while(DB.payments.some(function(p){return p.code===code;}));
+  DB.counters[key]=c;
+  return code;
 }
 function voucherDebtDelta(v){
   if(v.status==='void' || !v.partnerId || !isMoneyVoucher(v.type)) return 0;
@@ -1091,6 +1179,7 @@ function showPage(id, arg){
   var fn=RENDERERS[id];
   var c=$('#content');
   c.scrollTop=0;
+  c.onkeydown=null; // gỡ phím tắt cục bộ của form phiếu khi rời trang
   if(fn) fn(c, arg);
   else c.innerHTML='<div class="card">Đang xây dựng…</div>';
 }
@@ -1575,6 +1664,7 @@ RENDERERS.users=function(c){
       '<td><b>'+esc(u.username)+'</b>'+(SESSION.id===u.id?' <span class="tag">bạn</span>':'')+'</td>'+
       '<td>'+esc(u.fullName||'')+'</td>'+
       '<td><span class="badge" style="background:'+(u.role==='admin'?'#eff6ff;color:#1d4ed8':u.role==='manager'?'#f0fdf4;color:#15803d':'#f8fafc;color:#475569')+'">'+ROLES[u.role]+'</span></td>'+
+      '<td>'+(u.defaultWarehouseId&&whById(u.defaultWarehouseId)?esc(whName(u.defaultWarehouseId)):'<span class="muted">—</span>')+'</td>'+
       '<td class="muted small">'+fmtDateTime(u.createdAt)+'</td>'+
       '<td class="c">'+(u.active===false?'<span class="tag tag-red">Đã khóa</span>':'<span class="tag tag-green">Hoạt động</span>')+'</td>'+
       '<td class="c" style="white-space:nowrap">'+
@@ -1586,7 +1676,7 @@ RENDERERS.users=function(c){
   c.innerHTML=
   '<div class="card" style="padding:12px 16px;font-size:13px" >👥 <b>Phân quyền:</b> <b>Quản trị</b> — toàn quyền (người dùng, sao lưu, cài đặt, xóa phiếu vĩnh viễn); <b>Quản lý</b> — nghiệp vụ, kiểm kê, báo cáo, sửa/hủy phiếu; <b>Nhân viên</b> — lập phiếu nhập/xuất/chuyển/trả, xem tồn kho và lịch sử.</div>'+
   '<div class="toolbar"><div class="grow"></div><div class="toolbar-right"><button class="btn btn-primary btn-sm" onclick="userForm()">＋ Thêm người dùng</button></div></div>'+
-  '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Ngày tạo</th><th class="c">Trạng thái</th><th class="c">Thao tác</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Kho mặc định</th><th>Ngày tạo</th><th class="c">Trạng thái</th><th class="c">Thao tác</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 };
 function userForm(id){
   var u=id?DB.users.find(function(x){return x.id===id;}):null;
@@ -1598,6 +1688,9 @@ function userForm(id){
       '<div class="field"><label>Vai trò</label><select id="uf-role">'+
         Object.keys(ROLES).map(function(r){return '<option value="'+r+'" '+(u&&u.role===r?'selected':'')+'>'+ROLES[r]+'</option>';}).join('')+
       '</select></div>'+
+      '<div class="field"><label>Kho làm việc mặc định</label><select id="uf-wh"><option value="">— Không đặt —</option>'+
+        activeWarehouses().map(function(w){return '<option value="'+w.id+'" '+(u&&u.defaultWarehouseId===w.id?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+
+      '</select><div class="small muted" style="margin-top:4px">Tự chọn sẵn kho này khi lập phiếu / kiểm kê</div></div>'+
       (!u?'<div class="field"><label>Mật khẩu <span class="req">*</span></label><input type="password" id="uf-pw" placeholder="Tối thiểu 4 ký tự"></div>':'')+
       (u?'<div class="field"><label>Trạng thái</label><select id="uf-active"><option value="1" '+(u.active!==false?'selected':'')+'>Hoạt động</option><option value="0" '+(u.active===false?'selected':'')+'>Khóa tài khoản</option></select></div>':''),
     footer:'<button class="btn btn-ghost" onclick="closeModal()">Hủy</button><button class="btn btn-primary" onclick="saveUser(\''+(u?u.id:'')+'\')">Lưu</button>'
@@ -1611,6 +1704,7 @@ function saveUser(id){
     if(u.role==='admin' && (role!=='admin'||!active) && countActiveAdmins()<=1) return toast('Đây là quản trị viên hoạt động cuối cùng — không thể hạ quyền hay khóa','error');
     if(u.id===SESSION.id && !active) return toast('Không thể tự khóa tài khoản của chính mình','error');
     u.fullName=($('#uf-fn').value||'').trim(); u.role=role; u.active=active;
+    u.defaultWarehouseId=$('#uf-wh').value||null;
     audit('Sửa người dùng', u.username+' — '+ROLES[u.role]+(active?'':' (khóa)'));
     if(u.id===SESSION.id){ $('#user-role').textContent=ROLES[u.role]; buildNav(); }
   } else {
@@ -1620,7 +1714,7 @@ function saveUser(id){
     if(!/^[a-z0-9._-]{3,}$/.test(un)) return toast('Tên đăng nhập: tối thiểu 3 ký tự, chỉ chữ thường/số/._-','error');
     if(DB.users.some(function(x){return x.username===un;})) return toast('Tên đăng nhập đã tồn tại','error');
     if(pw.length<4) return toast('Mật khẩu tối thiểu 4 ký tự','error');
-    DB.users.push({id:uid(), username:un, passHash:hashPass(pw), fullName:($('#uf-fn').value||'').trim(), role:$('#uf-role').value, active:true, createdAt:nowISO()});
+    DB.users.push({id:uid(), username:un, passHash:hashPass(pw), fullName:($('#uf-fn').value||'').trim(), role:$('#uf-role').value, defaultWarehouseId:$('#uf-wh').value||null, active:true, createdAt:nowISO()});
     audit('Thêm người dùng', un+' — '+ROLES[$('#uf-role').value]);
   }
   saveDB(); closeModal(); toast('Đã lưu người dùng','success'); refreshPage();
@@ -1670,7 +1764,37 @@ function vfStockHint(pid, whId){
     if(s>0) others.push(esc(w.name)+': '+fmtQty(s));
   });
   if(!others.length) return '';
-  return '<div class="small" style="color:var(--amber);font-weight:600;white-space:nowrap">Còn ở '+others.join(' · ')+'</div>';
+  var btn=(VF && (VF.type==='out'||VF.type==='return_sup'))
+    ? '<br><button type="button" class="btn btn-xs btn-ghost" style="margin-top:3px" onclick="vfQuickTransfer(\''+pid+'\')">🔁 Chuyển kho nhanh</button>' : '';
+  return '<div class="small" style="color:var(--amber);font-weight:600;white-space:nowrap">Còn ở '+others.join(' · ')+btn+'</div>';
+}
+/* Mở nhanh phiếu chuyển kho điền sẵn khi hàng thiếu ở kho đang lập phiếu */
+function vfQuickTransfer(pid){
+  if(!VF) return;
+  var p=prodById(pid); if(!p) return;
+  var curWh=$('#vf-wh')?$('#vf-wh').value:null;
+  var line=VF.lines.find(function(l){return l.productId===pid;});
+  var need=line?Math.max(round3(line.qty-getStock(curWh,pid)),0):0;
+  var best=null, bestQty=0;
+  activeWarehouses().forEach(function(w){
+    if(w.id===curWh) return;
+    var s=getStock(w.id,pid);
+    if(s>bestQty){ best=w.id; bestQty=s; }
+  });
+  if(!best) return toast('Không còn kho nào khác có hàng này','warn');
+  var qty=need>0?Math.min(need,bestQty):Math.min(1,bestQty);
+  var toWh=curWh;
+  confirmDlg('🔁 Chuyển kho nhanh',
+    'Mở phiếu <b>chuyển kho</b> điền sẵn: <b>'+esc(p.name)+'</b> — <b>'+fmtQty(qty)+' '+esc(p.unit)+'</b> từ <b>'+esc(whName(best))+'</b> về <b>'+esc(whName(toWh))+'</b>.'+
+    (VF.lines.length?'<br><br>⚠️ Nội dung phiếu đang soạn sẽ <b>không được lưu</b> — lập phiếu chuyển xong hãy quay lại lập phiếu này.':''),
+    'Mở phiếu chuyển kho', function(){
+      openVoucherForm('transfer');
+      if(!VF || VF.type!=='transfer') return;
+      if($('#vf-wh')) $('#vf-wh').value=best;
+      if($('#vf-towh')) $('#vf-towh').value=toWh;
+      VF.lines=[{productId:pid, qty:qty, price:0}];
+      renderVFLines();
+    });
 }
 
 /* ---------- Danh sách phiếu theo loại ---------- */
@@ -1765,7 +1889,7 @@ function openVoucherForm(type, editId){
   if(editV){
     var dropped=0;
     editV.lines.forEach(function(l){
-      if(prodById(l.productId)) preLines.push({productId:l.productId, qty:l.qty, price:l.price});
+      if(prodById(l.productId)) preLines.push({productId:l.productId, qty:l.qty, price:l.price, costManual:(l.costManual?l.cost:'')});
       else dropped++;
     });
     if(dropped) toast(dropped+' dòng hàng bị bỏ qua do sản phẩm đã bị xóa khỏi danh mục','warn');
@@ -1778,8 +1902,9 @@ function openVoucherForm(type, editId){
   var pt=vfPartnerType(type);
   var partners=pt?activePartners(pt).slice():[];
   if(editV && editV.partnerId && pt && !partners.some(function(p){return p.id===editV.partnerId;}) && partnerById(editV.partnerId)) partners.unshift(partnerById(editV.partnerId));
-  var selWh=editV?editV.warehouseId:whs[0].id;
-  var selToWh=editV?editV.toWarehouseId:(whs[1]?whs[1].id:null);
+  var userWh=(SESSION && SESSION.defaultWarehouseId && whs.some(function(w){return w.id===SESSION.defaultWarehouseId;}))?SESSION.defaultWarehouseId:null;
+  var selWh=editV?editV.warehouseId:(userWh||whs[0].id);
+  var selToWh=editV?editV.toWarehouseId:(whs.filter(function(w){return w.id!==selWh;})[0]||{}).id||null;
   var whLabel=type==='in'||type==='return_cus'?'Kho nhập':type==='transfer'?'Kho xuất (nguồn)':'Kho xuất';
   var c=$('#content');
   $('#page-title').textContent=(editV?'Sửa ':'Tạo ')+vt.name.toLowerCase();
@@ -1793,7 +1918,7 @@ function openVoucherForm(type, editId){
     (editV&&type==='in'?'<div class="banner banner-warn" style="margin-bottom:12px">💡 Sửa phiếu nhập sẽ tính lại giá vốn bình quân tại thời điểm lưu (không hồi tố các phiếu xuất đã lập trước đó).</div>':'')+
     '<div class="form-grid">'+
       '<div class="field"><label>Ngày chứng từ <span class="req">*</span></label><input type="date" id="vf-date" value="'+(editV?editV.date:todayStr())+'"></div>'+
-      '<div class="field"><label>'+whLabel+' <span class="req">*</span></label><select id="vf-wh" onchange="renderVFLines()">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
+      '<div class="field"><label>'+whLabel+' <span class="req">*</span></label><select id="vf-wh" onchange="vfWhChanged()">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
       (type==='transfer'?'<div class="field"><label>Kho nhận (đích) <span class="req">*</span></label><select id="vf-towh">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selToWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>':'')+
       (pt?'<div class="field"><label>'+(pt==='supplier'?'Nhà cung cấp':'Khách hàng')+'</label><select id="vf-partner"><option value="">— Không chọn —</option>'+partners.map(function(p){return '<option value="'+p.id+'" '+(editV&&editV.partnerId===p.id?'selected':'')+'>'+esc(p.name)+'</option>';}).join('')+'</select></div>':'')+
       (isMoneyVoucher(type)?'<div class="field"><label>'+vfPayLabels(type).label+'</label>'+
@@ -1817,7 +1942,16 @@ function openVoucherForm(type, editId){
   '</div>';
   vfBindSearch();
   renderVFLines();
+  // Ctrl+Enter = Lưu phiếu (bỏ qua khi đang gõ trong ô tìm sản phẩm để tránh lưu nhầm)
+  c.onkeydown=function(e){
+    if(e.ctrlKey && e.key==='Enter'){ e.preventDefault(); saveVoucher(false); }
+  };
   $('#vf-search').focus();
+}
+/* Đổi kho giữa lúc lập phiếu: tính lại tồn các dòng + nhắc người dùng kiểm tra (đồng thuận hội đồng soát xét) */
+function vfWhChanged(){
+  renderVFLines();
+  if(VF && VF.lines.length) toast('Đã đổi kho — tồn kho từng dòng hàng đã tính lại theo kho mới, kiểm tra trước khi lưu','warn');
 }
 function vfBindSearch(){
   var inp=$('#vf-search'), dd=$('#vf-search-dd');
@@ -1859,8 +1993,25 @@ function vfPick(pid){
   renderVFLines();
   $('#vf-search').focus();
 }
-function vfSetQty(i,val){ if(VF.lines[i]){ VF.lines[i].qty=parseNum(val); vfUpdateCalc(); } }
-function vfSetPrice(i,val){ if(VF.lines[i]){ VF.lines[i].price=parseNum(val); vfUpdateCalc(); } }
+function vfSetQty(i,val){
+  if(!VF.lines[i]) return;
+  var n=parseNum(val);
+  if(n<0){ n=0; var el=$('#vfl-qty-'+i); if(el) el.value=0; }
+  VF.lines[i].qty=n; vfUpdateCalc();
+}
+function vfSetPrice(i,val,el){
+  if(!VF.lines[i]) return;
+  var n=parseNum(val);
+  if(n<0){ n=0; if(el) el.value=0; }
+  VF.lines[i].price=n; vfUpdateCalc();
+}
+function vfSetCost(i,val,el){
+  if(!VF.lines[i]) return;
+  if(String(val).trim()===''){ VF.lines[i].costManual=''; return; }
+  var n=parseNum(val);
+  if(n<0){ n=0; if(el) el.value=0; }
+  VF.lines[i].costManual=n;
+}
 function vfRemove(i){ VF.lines.splice(i,1); renderVFLines(); }
 function vfUpdateCalc(){
   var whId=$('#vf-wh').value, hasPrice=vfHasPrice(VF.type), total=0;
@@ -1900,6 +2051,7 @@ function renderVFLines(){
   var box=$('#vf-lines'); if(!box||!VF) return;
   var t=VF.type, whId=$('#vf-wh').value;
   var needSt=vfNeedsStock(t), hasPrice=vfHasPrice(t);
+  var showCost=(t==='return_cus') && isMgr(); // giá vốn hàng trả — nhập tay khi biết giá vốn gốc lúc bán
   if(!VF.lines.length){
     box.innerHTML='<div class="empty">Chưa có dòng hàng nào — tìm sản phẩm ở ô phía trên để thêm vào phiếu</div>';
     vfUpdateDebt(0);
@@ -1917,7 +2069,8 @@ function renderVFLines(){
       '<td class="c">'+esc(p.unit)+'</td>'+
       (needSt?'<td class="r"><span id="vfl-st-'+i+'" class="'+(over?'num-neg':'muted')+'">'+fmtQty(st)+'</span><span id="vfl-hint-'+i+'" class="'+(over?'':'hidden')+'">'+vfStockHint(l.productId,whId)+'</span></td>':'')+
       '<td style="width:110px"><input type="number" step="any" min="0" id="vfl-qty-'+i+'" value="'+l.qty+'" style="text-align:right'+(over?';border-color:var(--red)':'')+'" oninput="vfSetQty('+i+',this.value)"></td>'+
-      (hasPrice?'<td style="width:140px"><input type="number" step="any" min="0" value="'+l.price+'" style="text-align:right" oninput="vfSetPrice('+i+',this.value)"></td>':'')+
+      (hasPrice?'<td style="width:140px"><input type="number" step="any" min="0" value="'+l.price+'" style="text-align:right" oninput="vfSetPrice('+i+',this.value,this)"></td>':'')+
+      (showCost?'<td style="width:140px"><input type="number" step="any" min="0" value="'+(l.costManual===''||l.costManual===undefined?'':l.costManual)+'" placeholder="BQ: '+fmtMoney(p.costPrice)+'" title="Để trống = dùng giá vốn bình quân hiện tại" style="text-align:right" oninput="vfSetCost('+i+',this.value,this)"></td>':'')+
       (hasPrice?'<td class="r" id="vfl-amt-'+i+'"><b>'+fmtMoney(amt)+'</b></td>':'')+
       '<td class="c"><button class="btn btn-xs btn-danger" onclick="vfRemove('+i+')">✕</button></td>'+
     '</tr>';
@@ -1926,11 +2079,14 @@ function renderVFLines(){
     '<th class="c" style="width:36px">#</th><th>Sản phẩm</th><th class="c">ĐVT</th>'+
     (needSt?'<th class="r">Tồn tại kho</th>':'')+
     '<th class="r">Số lượng</th>'+
-    (hasPrice?'<th class="r">Đơn giá (đ)</th><th class="r">Thành tiền (đ)</th>':'')+
+    (hasPrice?'<th class="r">Đơn giá (đ)</th>':'')+
+    (showCost?'<th class="r">Giá vốn hàng trả (đ)</th>':'')+
+    (hasPrice?'<th class="r">Thành tiền (đ)</th>':'')+
     '<th class="c" style="width:50px"></th>'+
     '</tr></thead><tbody>'+rows+'</tbody>'+
-    (hasPrice?'<tfoot><tr><td colspan="'+(needSt?6:5)+'" class="r">TỔNG CỘNG</td><td class="r" id="vf-total" style="font-size:15px;color:var(--primary)">'+fmtMoney(total)+'</td><td></td></tr></tfoot>':'')+
-    '</table></div>';
+    (hasPrice?'<tfoot><tr><td colspan="'+((needSt?6:5)+(showCost?1:0))+'" class="r">TỔNG CỘNG</td><td class="r" id="vf-total" style="font-size:15px;color:var(--primary)">'+fmtMoney(total)+'</td><td></td></tr></tfoot>':'')+
+    '</table></div>'+
+    (showCost?'<div class="small muted" style="margin-top:8px">💡 Cột "Giá vốn hàng trả": để trống sẽ dùng giá vốn bình quân hiện tại; nhập tay khi biết giá vốn gốc của lần bán để báo cáo lợi nhuận chính xác.</div>':'');
   vfUpdateDebt(total);
 }
 function saveVoucher(doPrint){
@@ -1969,6 +2125,7 @@ function voucherDetail(id){
       '<td class="r '+(isAdj?(l.qty>=0?'num-pos':'num-neg'):'')+'">'+(isAdj&&l.qty>0?'+':'')+fmtQty(l.qty)+'</td>'+
       (hasPrice?'<td class="r">'+fmtMoney(l.price)+'</td><td class="r"><b>'+fmtMoney(l.qty*l.price)+'</b></td>':'')+
       (v.type==='out'?'<td class="r muted">'+fmtMoney(l.cost)+'</td><td class="r '+((l.price-l.cost)>=0?'num-pos':'num-neg')+'">'+fmtMoney((l.price-l.cost)*l.qty)+'</td>':'')+
+      (v.type==='return_cus'?'<td class="r muted">'+fmtMoney(l.cost)+(l.costManual?' <span class="tag" title="Giá vốn nhập tay">✍️</span>':'')+'</td>':'')+
     '</tr>';
   }).join('');
   var info=
@@ -2002,6 +2159,7 @@ function voucherDetail(id){
       '<th class="c">#</th><th>Sản phẩm</th><th class="c">ĐVT</th><th class="r">'+(isAdj?'Chênh lệch':'Số lượng')+'</th>'+
       (hasPrice?'<th class="r">Đơn giá</th><th class="r">Thành tiền</th>':'')+
       (v.type==='out'?'<th class="r">Giá vốn</th><th class="r">Lợi nhuận</th>':'')+
+      (v.type==='return_cus'?'<th class="r">Giá vốn hàng trả</th>':'')+
       '</tr></thead><tbody>'+rows+'</tbody>'+
       (hasPrice?'<tfoot><tr><td colspan="4" class="r">TỔNG CỘNG</td><td></td><td class="r" style="color:var(--primary)">'+fmtMoney(v.total)+'</td>'+(v.type==='out'?'<td></td><td class="r '+(profit>=0?'num-pos':'num-neg')+'">'+fmtMoney(profit)+'</td>':'')+'</tr></tfoot>':'')+
       '</table></div>'+payHTML,
@@ -2088,7 +2246,9 @@ var ST={whId:null, counts:{}, q:'', onlyStock:true};
 RENDERERS.stocktake=function(c){
   var whs=activeWarehouses();
   if(!whs.length){ c.innerHTML='<div class="card"><div class="empty">Chưa có kho nào — hãy tạo kho trước khi kiểm kê</div></div>'; return; }
-  if(!ST.whId || !whById(ST.whId)) ST.whId=whs[0].id;
+  if(!ST.whId || !whById(ST.whId)){
+    ST.whId=(SESSION && SESSION.defaultWarehouseId && whs.some(function(w){return w.id===SESSION.defaultWarehouseId;}))?SESSION.defaultWarehouseId:whs[0].id;
+  }
   c.innerHTML=
   '<div class="card" style="padding:12px 16px;font-size:13px">📋 <b>Kiểm kê kho:</b> nhập số lượng <b>thực đếm</b> cho các mặt hàng có chênh lệch so với sổ sách, sau đó bấm <b>Tạo phiếu điều chỉnh</b>. Tồn kho sẽ được điều chỉnh đúng bằng số thực đếm, có lưu vết đầy đủ.</div>'+
   '<div class="toolbar">'+
@@ -2115,7 +2275,7 @@ function stRows(){
     if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     return true;
   }).sort(function(a,b){return a.sku.localeCompare(b.sku,'vi');}).slice(0,400);
-  var html=list.map(function(p){
+  var html=list.map(function(p,idx){
     var book=getStock(ST.whId,p.id);
     var entered=ST.counts[p.id];
     var actual=entered===undefined?book:parseNum(entered);
@@ -2123,7 +2283,7 @@ function stRows(){
     return '<tr>'+
       '<td><b>'+esc(p.sku)+'</b></td><td>'+esc(p.name)+'</td><td class="c">'+esc(p.unit)+'</td>'+
       '<td class="r">'+fmtQty(book)+'</td>'+
-      '<td><input type="number" step="any" min="0" style="text-align:right" value="'+(entered===undefined?book:entered)+'" oninput="stSetCount(\''+p.id+'\',this.value)"></td>'+
+      '<td><input type="number" step="any" min="0" id="st-in-'+idx+'" style="text-align:right" value="'+(entered===undefined?book:entered)+'" oninput="stSetCount(\''+p.id+'\',this.value,this)" onkeydown="stEnterNext(event,'+idx+')"></td>'+
       '<td class="r" id="st-delta-'+p.id+'">'+stDeltaHTML(delta)+'</td>'+
     '</tr>';
   }).join('');
@@ -2134,8 +2294,16 @@ function stDeltaHTML(delta){
   if(Math.abs(delta)<1e-9) return '<span class="muted">0</span>';
   return '<b class="'+(delta>0?'num-pos':'num-neg')+'">'+(delta>0?'+':'')+fmtQty(delta)+'</b>';
 }
-function stSetCount(pid,val){
+/* Enter trong ô thực đếm → nhảy sang ô kế tiếp (kiểm kê hàng loạt không cần chuột) */
+function stEnterNext(e, idx){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  var nx=$('#st-in-'+(idx+1));
+  if(nx){ nx.focus(); if(nx.select) nx.select(); }
+}
+function stSetCount(pid,val,el){
   var book=getStock(ST.whId,pid);
+  if(String(val).trim()!=='' && parseNum(val)<0){ val=0; if(el) el.value=0; }
   if(String(val).trim()===''){ delete ST.counts[pid]; }
   else {
     ST.counts[pid]=val;
@@ -3045,6 +3213,16 @@ function loadDemoData(){
   toast('Đã nạp dữ liệu mẫu','success');
   refreshPage();
 }
+function askRecostAll(){
+  confirmDlg('🧮 Tính lại giá vốn toàn bộ',
+    'Hệ thống sẽ chạy lại <b>toàn bộ phiếu theo trình tự thời gian</b> để tính lại giá vốn bình quân của mọi sản phẩm và giá vốn trên từng dòng phiếu.<br><br>'+
+    '• Số lượng tồn kho <b>không thay đổi</b><br>• Giá vốn nhập tay trên phiếu khách trả được giữ nguyên<br>• Báo cáo lợi nhuận / NXT sẽ phản ánh giá vốn mới<br><br>Nên tải file sao lưu trước khi chạy. Tiếp tục?',
+    'Tính lại ngay', function(){
+      var r=recostAll();
+      toast('Đã tính lại giá vốn: cập nhật '+r.changedProducts+' sản phẩm, '+r.changedLines+' dòng phiếu ('+r.replayed+' phiếu)','success');
+      refreshPage();
+    });
+}
 
 /* ---------- TRANG HỆ THỐNG ---------- */
 RENDERERS.system=function(c){
@@ -3083,6 +3261,11 @@ RENDERERS.system=function(c){
         '<button class="btn btn-primary btn-sm" onclick="doBackup()">📥 Tải file sao lưu (.json)</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="doRestore()">📤 Khôi phục từ file…</button>'+
       '</div>'+
+    '</div>'+
+    '<div class="card">'+
+      '<div class="card-title">🧮 Bảo trì giá vốn</div>'+
+      '<div style="font-size:13px;line-height:1.8;margin-bottom:12px" class="muted">Sửa / hủy / xóa phiếu nhập trong quá khứ có thể làm giá vốn bình quân lệch (BQGQ không tự hồi tố). Tiện ích này <b>tính lại toàn bộ giá vốn</b> bằng cách chạy lại mọi phiếu theo trình tự thời gian — số lượng tồn giữ nguyên, giá vốn nhập tay trên phiếu khách trả được tôn trọng.</div>'+
+      '<button class="btn btn-ghost btn-sm" onclick="askRecostAll()">🧮 Tính lại giá vốn toàn bộ</button>'+
     '</div>'+
     '<div class="card">'+
       '<div class="card-title">🗄️ Dữ liệu</div>'+

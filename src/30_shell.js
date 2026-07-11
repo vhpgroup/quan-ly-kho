@@ -87,6 +87,7 @@ function showPage(id, arg){
   var fn=RENDERERS[id];
   var c=$('#content');
   c.scrollTop=0;
+  c.onkeydown=null; // gỡ phím tắt cục bộ của form phiếu khi rời trang
   if(fn) fn(c, arg);
   else c.innerHTML='<div class="card">Đang xây dựng…</div>';
 }

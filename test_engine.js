@@ -301,6 +301,80 @@ check('di trú: phiếu nhập cũ paid=total', legacy.vouchers[0].paid===5000, 
 check('di trú: chuyển kho paid=0', legacy.vouchers[1].paid===0);
 check('di trú: có mảng payments', Array.isArray(legacy.payments));
 
+// ================== 4f. Vá lỗi theo hội đồng soát xét ==================
+// (giá âm, mã phiếu trùng, di trú dữ liệu hỏng, tính lại giá vốn, giá vốn hàng khách trả)
+DB=defaultDB(); SESSION=DB.users[0];
+DB.warehouses.push({id:'wF',code:'KF',name:'Kho F',active:true});
+const pF={id:'pF',sku:'F01',name:'Hàng F',unit:'cái',costPrice:0,salePrice:1000,minStock:0,active:true};
+DB.products.push(pF);
+
+// --- giá âm bị chặn ở engine ---
+check('giá âm: phiếu nhập bị chặn', !postVoucher({type:'in',date:'2026-07-01',warehouseId:'wF',lines:[{productId:'pF',qty:10,price:-50}]}).ok);
+r=postVoucher({type:'in',date:'2026-07-01',warehouseId:'wF',lines:[{productId:'pF',qty:10,price:100}]});
+check('giá dương vẫn nhập bình thường', r.ok, r.error);
+check('giá âm: phiếu xuất bị chặn', !postVoucher({type:'out',date:'2026-07-02',warehouseId:'wF',lines:[{productId:'pF',qty:1,price:-1}]}).ok);
+check('giá âm: giá vốn tay âm trên phiếu khách trả bị chặn', !postVoucher({type:'return_cus',date:'2026-07-02',warehouseId:'wF',lines:[{productId:'pF',qty:1,price:100,costManual:-5}]}).ok);
+
+// --- mã phiếu không trùng khi counters mất ---
+DB.counters={};
+let vDup=postVoucher({type:'in',date:'2026-07-03',warehouseId:'wF',lines:[{productId:'pF',qty:1,price:100}]}).voucher;
+check('mã phiếu không trùng khi counters bị mất', !DB.vouchers.some(v=>v.id!==vDup.id&&v.code===vDup.code), vDup.code);
+DB.partners.push({id:'sF',code:'NCCF',type:'supplier',name:'NCC F',active:true});
+postPayment({type:'payment',partnerId:'sF',amount:100});
+DB.counters['pay_payment']=1;
+let pmDup=postPayment({type:'payment',partnerId:'sF',amount:200}).payment;
+check('mã phiếu chi không trùng khi counters reset', !DB.payments.some(x=>x.id!==pmDup.id&&x.code===pmDup.code), pmDup.code);
+
+// --- di trú dữ liệu hỏng ---
+let legacy2=migrateDB({users:[{}],products:[],vouchers:[{type:'in',total:'abc',status:'posted'}]});
+check('di trú: voucher thiếu lines → mảng rỗng', Array.isArray(legacy2.vouchers[0].lines));
+check('di trú: total hỏng → 0', legacy2.vouchers[0].total===0);
+(function(){
+  var keep=DB;
+  DB=migrateDB({users:[{}],products:[],vouchers:[{type:'in',total:5,status:'posted'}]});
+  var okRun=true;
+  try{ reportNXT('2026-01-01','2026-12-31',null); reportProfit('2026-01-01','2026-12-31'); }catch(e){ okRun=false; }
+  check('di trú: báo cáo không crash với voucher thiếu lines', okRun);
+  DB=keep;
+})();
+
+// --- recostAll: BQGQ nhiễm giá tương lai khi sửa phiếu nhập cũ, replay sửa về đúng ---
+DB=defaultDB(); SESSION=DB.users[0];
+DB.warehouses.push({id:'wG',code:'KG',name:'Kho G',active:true});
+const pG={id:'pG',sku:'G01',name:'Hàng G',unit:'cái',costPrice:0,salePrice:999,minStock:0,active:true};
+DB.products.push(pG);
+let n1=postVoucher({type:'in',date:'2026-07-01',warehouseId:'wG',lines:[{productId:'pG',qty:10,price:100}]}).voucher;
+postVoucher({type:'in',date:'2026-07-02',warehouseId:'wG',lines:[{productId:'pG',qty:10,price:400}]});
+check('recost-setup: BQGQ = 250', pG.costPrice===250, pG.costPrice);
+let oG=postVoucher({type:'out',date:'2026-07-03',warehouseId:'wG',lines:[{productId:'pG',qty:4,price:999}]}).voucher;
+check('recost-setup: cost dòng xuất = 250', oG.lines[0].cost===250, oG.lines[0].cost);
+r=updateVoucher(n1.id,{type:'in',date:'2026-07-01',warehouseId:'wG',lines:[{productId:'pG',qty:10,price:200}]});
+check('sửa phiếu nhập cũ (có phiếu xen giữa) OK', r.ok, r.error);
+check('BQGQ sau sửa bị nhiễm giá tương lai (hành vi đã biết, chờ recost): != 300', pG.costPrice!==300, pG.costPrice);
+check('phạm vi công bố: cost dòng xuất CŨ giữ nguyên 250 sau khi sửa', oG.lines[0].cost===250, oG.lines[0].cost);
+let rc=recostAll();
+check('recostAll chạy OK', rc.ok && rc.replayed===3, rc);
+check('recostAll: BQGQ về đúng 300 = (10×200+10×400)/20', pG.costPrice===300, pG.costPrice);
+check('recostAll: cost dòng xuất tính lại theo trình tự = 300', oG.lines[0].cost===300, oG.lines[0].cost);
+check('recostAll: tồn kho không đổi', getStock('wG','pG')===16, getStock('wG','pG'));
+
+// --- giá vốn hàng khách trả: mặc định BQGQ hiện tại, nhập tay được tôn trọng ---
+DB=defaultDB(); SESSION=DB.users[0];
+DB.warehouses.push({id:'wH',code:'KH0',name:'Kho H',active:true});
+const pH={id:'pH',sku:'H01',name:'Hàng H',unit:'cái',costPrice:0,salePrice:500,minStock:0,active:true};
+DB.products.push(pH);
+DB.partners.push({id:'kH',code:'KHH',type:'customer',name:'Khách H',active:true});
+postVoucher({type:'in',date:'2026-07-01',warehouseId:'wH',lines:[{productId:'pH',qty:10,price:100}]});
+postVoucher({type:'out',date:'2026-07-02',warehouseId:'wH',partnerId:'kH',paid:0,lines:[{productId:'pH',qty:10,price:500}]});
+postVoucher({type:'in',date:'2026-07-03',warehouseId:'wH',lines:[{productId:'pH',qty:1,price:1000}]});
+check('cost-setup: BQGQ hiện tại = 1000 (bán hết rồi nhập giá cao)', pH.costPrice===1000, pH.costPrice);
+let rDef=postVoucher({type:'return_cus',date:'2026-07-04',warehouseId:'wH',partnerId:'kH',paid:0,lines:[{productId:'pH',qty:1,price:500}]}).voucher;
+check('khách trả mặc định: cost = BQGQ hiện tại (hành vi công bố)', rDef.lines[0].cost===1000 && !rDef.lines[0].costManual, rDef.lines[0].cost);
+let rMan=postVoucher({type:'return_cus',date:'2026-07-04',warehouseId:'wH',partnerId:'kH',paid:0,lines:[{productId:'pH',qty:1,price:500,costManual:100}]}).voucher;
+check('khách trả nhập tay: cost = 100 kèm cờ costManual', rMan.lines[0].cost===100 && rMan.lines[0].costManual===true, rMan.lines[0].cost);
+recostAll();
+check('recostAll tôn trọng giá vốn tay, dòng mặc định theo replay', rMan.lines[0].cost===100 && rDef.lines[0].cost===1000, [rMan.lines[0].cost, rDef.lines[0].cost]);
+
 // ================== 5. Seed demo ==================
 DB=defaultDB();
 SESSION=null;

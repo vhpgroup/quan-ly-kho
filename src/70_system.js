@@ -341,6 +341,16 @@ function loadDemoData(){
   toast('Đã nạp dữ liệu mẫu','success');
   refreshPage();
 }
+function askRecostAll(){
+  confirmDlg('🧮 Tính lại giá vốn toàn bộ',
+    'Hệ thống sẽ chạy lại <b>toàn bộ phiếu theo trình tự thời gian</b> để tính lại giá vốn bình quân của mọi sản phẩm và giá vốn trên từng dòng phiếu.<br><br>'+
+    '• Số lượng tồn kho <b>không thay đổi</b><br>• Giá vốn nhập tay trên phiếu khách trả được giữ nguyên<br>• Báo cáo lợi nhuận / NXT sẽ phản ánh giá vốn mới<br><br>Nên tải file sao lưu trước khi chạy. Tiếp tục?',
+    'Tính lại ngay', function(){
+      var r=recostAll();
+      toast('Đã tính lại giá vốn: cập nhật '+r.changedProducts+' sản phẩm, '+r.changedLines+' dòng phiếu ('+r.replayed+' phiếu)','success');
+      refreshPage();
+    });
+}
 
 /* ---------- TRANG HỆ THỐNG ---------- */
 RENDERERS.system=function(c){
@@ -379,6 +389,11 @@ RENDERERS.system=function(c){
         '<button class="btn btn-primary btn-sm" onclick="doBackup()">📥 Tải file sao lưu (.json)</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="doRestore()">📤 Khôi phục từ file…</button>'+
       '</div>'+
+    '</div>'+
+    '<div class="card">'+
+      '<div class="card-title">🧮 Bảo trì giá vốn</div>'+
+      '<div style="font-size:13px;line-height:1.8;margin-bottom:12px" class="muted">Sửa / hủy / xóa phiếu nhập trong quá khứ có thể làm giá vốn bình quân lệch (BQGQ không tự hồi tố). Tiện ích này <b>tính lại toàn bộ giá vốn</b> bằng cách chạy lại mọi phiếu theo trình tự thời gian — số lượng tồn giữ nguyên, giá vốn nhập tay trên phiếu khách trả được tôn trọng.</div>'+
+      '<button class="btn btn-ghost btn-sm" onclick="askRecostAll()">🧮 Tính lại giá vốn toàn bộ</button>'+
     '</div>'+
     '<div class="card">'+
       '<div class="card-title">🗄️ Dữ liệu</div>'+

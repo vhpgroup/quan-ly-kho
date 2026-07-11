@@ -373,6 +373,7 @@ RENDERERS.users=function(c){
       '<td><b>'+esc(u.username)+'</b>'+(SESSION.id===u.id?' <span class="tag">bạn</span>':'')+'</td>'+
       '<td>'+esc(u.fullName||'')+'</td>'+
       '<td><span class="badge" style="background:'+(u.role==='admin'?'#eff6ff;color:#1d4ed8':u.role==='manager'?'#f0fdf4;color:#15803d':'#f8fafc;color:#475569')+'">'+ROLES[u.role]+'</span></td>'+
+      '<td>'+(u.defaultWarehouseId&&whById(u.defaultWarehouseId)?esc(whName(u.defaultWarehouseId)):'<span class="muted">—</span>')+'</td>'+
       '<td class="muted small">'+fmtDateTime(u.createdAt)+'</td>'+
       '<td class="c">'+(u.active===false?'<span class="tag tag-red">Đã khóa</span>':'<span class="tag tag-green">Hoạt động</span>')+'</td>'+
       '<td class="c" style="white-space:nowrap">'+
@@ -384,7 +385,7 @@ RENDERERS.users=function(c){
   c.innerHTML=
   '<div class="card" style="padding:12px 16px;font-size:13px" >👥 <b>Phân quyền:</b> <b>Quản trị</b> — toàn quyền (người dùng, sao lưu, cài đặt, xóa phiếu vĩnh viễn); <b>Quản lý</b> — nghiệp vụ, kiểm kê, báo cáo, sửa/hủy phiếu; <b>Nhân viên</b> — lập phiếu nhập/xuất/chuyển/trả, xem tồn kho và lịch sử.</div>'+
   '<div class="toolbar"><div class="grow"></div><div class="toolbar-right"><button class="btn btn-primary btn-sm" onclick="userForm()">＋ Thêm người dùng</button></div></div>'+
-  '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Ngày tạo</th><th class="c">Trạng thái</th><th class="c">Thao tác</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tên đăng nhập</th><th>Họ tên</th><th>Vai trò</th><th>Kho mặc định</th><th>Ngày tạo</th><th class="c">Trạng thái</th><th class="c">Thao tác</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 };
 function userForm(id){
   var u=id?DB.users.find(function(x){return x.id===id;}):null;
@@ -396,6 +397,9 @@ function userForm(id){
       '<div class="field"><label>Vai trò</label><select id="uf-role">'+
         Object.keys(ROLES).map(function(r){return '<option value="'+r+'" '+(u&&u.role===r?'selected':'')+'>'+ROLES[r]+'</option>';}).join('')+
       '</select></div>'+
+      '<div class="field"><label>Kho làm việc mặc định</label><select id="uf-wh"><option value="">— Không đặt —</option>'+
+        activeWarehouses().map(function(w){return '<option value="'+w.id+'" '+(u&&u.defaultWarehouseId===w.id?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+
+      '</select><div class="small muted" style="margin-top:4px">Tự chọn sẵn kho này khi lập phiếu / kiểm kê</div></div>'+
       (!u?'<div class="field"><label>Mật khẩu <span class="req">*</span></label><input type="password" id="uf-pw" placeholder="Tối thiểu 4 ký tự"></div>':'')+
       (u?'<div class="field"><label>Trạng thái</label><select id="uf-active"><option value="1" '+(u.active!==false?'selected':'')+'>Hoạt động</option><option value="0" '+(u.active===false?'selected':'')+'>Khóa tài khoản</option></select></div>':''),
     footer:'<button class="btn btn-ghost" onclick="closeModal()">Hủy</button><button class="btn btn-primary" onclick="saveUser(\''+(u?u.id:'')+'\')">Lưu</button>'
@@ -409,6 +413,7 @@ function saveUser(id){
     if(u.role==='admin' && (role!=='admin'||!active) && countActiveAdmins()<=1) return toast('Đây là quản trị viên hoạt động cuối cùng — không thể hạ quyền hay khóa','error');
     if(u.id===SESSION.id && !active) return toast('Không thể tự khóa tài khoản của chính mình','error');
     u.fullName=($('#uf-fn').value||'').trim(); u.role=role; u.active=active;
+    u.defaultWarehouseId=$('#uf-wh').value||null;
     audit('Sửa người dùng', u.username+' — '+ROLES[u.role]+(active?'':' (khóa)'));
     if(u.id===SESSION.id){ $('#user-role').textContent=ROLES[u.role]; buildNav(); }
   } else {
@@ -418,7 +423,7 @@ function saveUser(id){
     if(!/^[a-z0-9._-]{3,}$/.test(un)) return toast('Tên đăng nhập: tối thiểu 3 ký tự, chỉ chữ thường/số/._-','error');
     if(DB.users.some(function(x){return x.username===un;})) return toast('Tên đăng nhập đã tồn tại','error');
     if(pw.length<4) return toast('Mật khẩu tối thiểu 4 ký tự','error');
-    DB.users.push({id:uid(), username:un, passHash:hashPass(pw), fullName:($('#uf-fn').value||'').trim(), role:$('#uf-role').value, active:true, createdAt:nowISO()});
+    DB.users.push({id:uid(), username:un, passHash:hashPass(pw), fullName:($('#uf-fn').value||'').trim(), role:$('#uf-role').value, defaultWarehouseId:$('#uf-wh').value||null, active:true, createdAt:nowISO()});
     audit('Thêm người dùng', un+' — '+ROLES[$('#uf-role').value]);
   }
   saveDB(); closeModal(); toast('Đã lưu người dùng','success'); refreshPage();

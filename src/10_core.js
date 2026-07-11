@@ -184,8 +184,14 @@ function migrateDB(obj){
   obj.stocks=obj.stocks||{}; obj.vouchers=obj.vouchers||[]; obj.payments=obj.payments||[]; obj.auditLog=obj.auditLog||[]; obj.counters=obj.counters||{};
   // Di trú công nợ: phiếu có tiền lập trước khi có tính năng thanh toán (thiếu trường paid)
   // được coi là ĐÃ THANH TOÁN ĐỦ để công nợ khởi điểm bằng 0 (không hồi tố nợ cũ).
+  // Đồng thời vá dữ liệu hỏng: lines phải là mảng, total phải là số (tránh crash báo cáo).
   obj.vouchers.forEach(function(v){
+    if(!Array.isArray(v.lines)) v.lines=[];
+    if(typeof v.total!=='number' || !isFinite(v.total)) v.total=0;
     if(v.paid===undefined) v.paid=(v.type==='in'||v.type==='out'||v.type==='return_sup'||v.type==='return_cus') ? (v.total||0) : 0;
+  });
+  obj.payments.forEach(function(pm){
+    if(typeof pm.amount!=='number' || !isFinite(pm.amount)) pm.amount=0;
   });
   return obj;
 }

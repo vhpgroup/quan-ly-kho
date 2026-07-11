@@ -24,7 +24,37 @@ function vfStockHint(pid, whId){
     if(s>0) others.push(esc(w.name)+': '+fmtQty(s));
   });
   if(!others.length) return '';
-  return '<div class="small" style="color:var(--amber);font-weight:600;white-space:nowrap">Còn ở '+others.join(' · ')+'</div>';
+  var btn=(VF && (VF.type==='out'||VF.type==='return_sup'))
+    ? '<br><button type="button" class="btn btn-xs btn-ghost" style="margin-top:3px" onclick="vfQuickTransfer(\''+pid+'\')">🔁 Chuyển kho nhanh</button>' : '';
+  return '<div class="small" style="color:var(--amber);font-weight:600;white-space:nowrap">Còn ở '+others.join(' · ')+btn+'</div>';
+}
+/* Mở nhanh phiếu chuyển kho điền sẵn khi hàng thiếu ở kho đang lập phiếu */
+function vfQuickTransfer(pid){
+  if(!VF) return;
+  var p=prodById(pid); if(!p) return;
+  var curWh=$('#vf-wh')?$('#vf-wh').value:null;
+  var line=VF.lines.find(function(l){return l.productId===pid;});
+  var need=line?Math.max(round3(line.qty-getStock(curWh,pid)),0):0;
+  var best=null, bestQty=0;
+  activeWarehouses().forEach(function(w){
+    if(w.id===curWh) return;
+    var s=getStock(w.id,pid);
+    if(s>bestQty){ best=w.id; bestQty=s; }
+  });
+  if(!best) return toast('Không còn kho nào khác có hàng này','warn');
+  var qty=need>0?Math.min(need,bestQty):Math.min(1,bestQty);
+  var toWh=curWh;
+  confirmDlg('🔁 Chuyển kho nhanh',
+    'Mở phiếu <b>chuyển kho</b> điền sẵn: <b>'+esc(p.name)+'</b> — <b>'+fmtQty(qty)+' '+esc(p.unit)+'</b> từ <b>'+esc(whName(best))+'</b> về <b>'+esc(whName(toWh))+'</b>.'+
+    (VF.lines.length?'<br><br>⚠️ Nội dung phiếu đang soạn sẽ <b>không được lưu</b> — lập phiếu chuyển xong hãy quay lại lập phiếu này.':''),
+    'Mở phiếu chuyển kho', function(){
+      openVoucherForm('transfer');
+      if(!VF || VF.type!=='transfer') return;
+      if($('#vf-wh')) $('#vf-wh').value=best;
+      if($('#vf-towh')) $('#vf-towh').value=toWh;
+      VF.lines=[{productId:pid, qty:qty, price:0}];
+      renderVFLines();
+    });
 }
 
 /* ---------- Danh sách phiếu theo loại ---------- */
@@ -119,7 +149,7 @@ function openVoucherForm(type, editId){
   if(editV){
     var dropped=0;
     editV.lines.forEach(function(l){
-      if(prodById(l.productId)) preLines.push({productId:l.productId, qty:l.qty, price:l.price});
+      if(prodById(l.productId)) preLines.push({productId:l.productId, qty:l.qty, price:l.price, costManual:(l.costManual?l.cost:'')});
       else dropped++;
     });
     if(dropped) toast(dropped+' dòng hàng bị bỏ qua do sản phẩm đã bị xóa khỏi danh mục','warn');
@@ -132,8 +162,9 @@ function openVoucherForm(type, editId){
   var pt=vfPartnerType(type);
   var partners=pt?activePartners(pt).slice():[];
   if(editV && editV.partnerId && pt && !partners.some(function(p){return p.id===editV.partnerId;}) && partnerById(editV.partnerId)) partners.unshift(partnerById(editV.partnerId));
-  var selWh=editV?editV.warehouseId:whs[0].id;
-  var selToWh=editV?editV.toWarehouseId:(whs[1]?whs[1].id:null);
+  var userWh=(SESSION && SESSION.defaultWarehouseId && whs.some(function(w){return w.id===SESSION.defaultWarehouseId;}))?SESSION.defaultWarehouseId:null;
+  var selWh=editV?editV.warehouseId:(userWh||whs[0].id);
+  var selToWh=editV?editV.toWarehouseId:(whs.filter(function(w){return w.id!==selWh;})[0]||{}).id||null;
   var whLabel=type==='in'||type==='return_cus'?'Kho nhập':type==='transfer'?'Kho xuất (nguồn)':'Kho xuất';
   var c=$('#content');
   $('#page-title').textContent=(editV?'Sửa ':'Tạo ')+vt.name.toLowerCase();
@@ -147,7 +178,7 @@ function openVoucherForm(type, editId){
     (editV&&type==='in'?'<div class="banner banner-warn" style="margin-bottom:12px">💡 Sửa phiếu nhập sẽ tính lại giá vốn bình quân tại thời điểm lưu (không hồi tố các phiếu xuất đã lập trước đó).</div>':'')+
     '<div class="form-grid">'+
       '<div class="field"><label>Ngày chứng từ <span class="req">*</span></label><input type="date" id="vf-date" value="'+(editV?editV.date:todayStr())+'"></div>'+
-      '<div class="field"><label>'+whLabel+' <span class="req">*</span></label><select id="vf-wh" onchange="renderVFLines()">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
+      '<div class="field"><label>'+whLabel+' <span class="req">*</span></label><select id="vf-wh" onchange="vfWhChanged()">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>'+
       (type==='transfer'?'<div class="field"><label>Kho nhận (đích) <span class="req">*</span></label><select id="vf-towh">'+whs.map(function(w){return '<option value="'+w.id+'" '+(w.id===selToWh?'selected':'')+'>'+esc(w.name)+'</option>';}).join('')+'</select></div>':'')+
       (pt?'<div class="field"><label>'+(pt==='supplier'?'Nhà cung cấp':'Khách hàng')+'</label><select id="vf-partner"><option value="">— Không chọn —</option>'+partners.map(function(p){return '<option value="'+p.id+'" '+(editV&&editV.partnerId===p.id?'selected':'')+'>'+esc(p.name)+'</option>';}).join('')+'</select></div>':'')+
       (isMoneyVoucher(type)?'<div class="field"><label>'+vfPayLabels(type).label+'</label>'+
@@ -171,7 +202,16 @@ function openVoucherForm(type, editId){
   '</div>';
   vfBindSearch();
   renderVFLines();
+  // Ctrl+Enter = Lưu phiếu (bỏ qua khi đang gõ trong ô tìm sản phẩm để tránh lưu nhầm)
+  c.onkeydown=function(e){
+    if(e.ctrlKey && e.key==='Enter'){ e.preventDefault(); saveVoucher(false); }
+  };
   $('#vf-search').focus();
+}
+/* Đổi kho giữa lúc lập phiếu: tính lại tồn các dòng + nhắc người dùng kiểm tra (đồng thuận hội đồng soát xét) */
+function vfWhChanged(){
+  renderVFLines();
+  if(VF && VF.lines.length) toast('Đã đổi kho — tồn kho từng dòng hàng đã tính lại theo kho mới, kiểm tra trước khi lưu','warn');
 }
 function vfBindSearch(){
   var inp=$('#vf-search'), dd=$('#vf-search-dd');
@@ -213,8 +253,25 @@ function vfPick(pid){
   renderVFLines();
   $('#vf-search').focus();
 }
-function vfSetQty(i,val){ if(VF.lines[i]){ VF.lines[i].qty=parseNum(val); vfUpdateCalc(); } }
-function vfSetPrice(i,val){ if(VF.lines[i]){ VF.lines[i].price=parseNum(val); vfUpdateCalc(); } }
+function vfSetQty(i,val){
+  if(!VF.lines[i]) return;
+  var n=parseNum(val);
+  if(n<0){ n=0; var el=$('#vfl-qty-'+i); if(el) el.value=0; }
+  VF.lines[i].qty=n; vfUpdateCalc();
+}
+function vfSetPrice(i,val,el){
+  if(!VF.lines[i]) return;
+  var n=parseNum(val);
+  if(n<0){ n=0; if(el) el.value=0; }
+  VF.lines[i].price=n; vfUpdateCalc();
+}
+function vfSetCost(i,val,el){
+  if(!VF.lines[i]) return;
+  if(String(val).trim()===''){ VF.lines[i].costManual=''; return; }
+  var n=parseNum(val);
+  if(n<0){ n=0; if(el) el.value=0; }
+  VF.lines[i].costManual=n;
+}
 function vfRemove(i){ VF.lines.splice(i,1); renderVFLines(); }
 function vfUpdateCalc(){
   var whId=$('#vf-wh').value, hasPrice=vfHasPrice(VF.type), total=0;
@@ -254,6 +311,7 @@ function renderVFLines(){
   var box=$('#vf-lines'); if(!box||!VF) return;
   var t=VF.type, whId=$('#vf-wh').value;
   var needSt=vfNeedsStock(t), hasPrice=vfHasPrice(t);
+  var showCost=(t==='return_cus') && isMgr(); // giá vốn hàng trả — nhập tay khi biết giá vốn gốc lúc bán
   if(!VF.lines.length){
     box.innerHTML='<div class="empty">Chưa có dòng hàng nào — tìm sản phẩm ở ô phía trên để thêm vào phiếu</div>';
     vfUpdateDebt(0);
@@ -271,7 +329,8 @@ function renderVFLines(){
       '<td class="c">'+esc(p.unit)+'</td>'+
       (needSt?'<td class="r"><span id="vfl-st-'+i+'" class="'+(over?'num-neg':'muted')+'">'+fmtQty(st)+'</span><span id="vfl-hint-'+i+'" class="'+(over?'':'hidden')+'">'+vfStockHint(l.productId,whId)+'</span></td>':'')+
       '<td style="width:110px"><input type="number" step="any" min="0" id="vfl-qty-'+i+'" value="'+l.qty+'" style="text-align:right'+(over?';border-color:var(--red)':'')+'" oninput="vfSetQty('+i+',this.value)"></td>'+
-      (hasPrice?'<td style="width:140px"><input type="number" step="any" min="0" value="'+l.price+'" style="text-align:right" oninput="vfSetPrice('+i+',this.value)"></td>':'')+
+      (hasPrice?'<td style="width:140px"><input type="number" step="any" min="0" value="'+l.price+'" style="text-align:right" oninput="vfSetPrice('+i+',this.value,this)"></td>':'')+
+      (showCost?'<td style="width:140px"><input type="number" step="any" min="0" value="'+(l.costManual===''||l.costManual===undefined?'':l.costManual)+'" placeholder="BQ: '+fmtMoney(p.costPrice)+'" title="Để trống = dùng giá vốn bình quân hiện tại" style="text-align:right" oninput="vfSetCost('+i+',this.value,this)"></td>':'')+
       (hasPrice?'<td class="r" id="vfl-amt-'+i+'"><b>'+fmtMoney(amt)+'</b></td>':'')+
       '<td class="c"><button class="btn btn-xs btn-danger" onclick="vfRemove('+i+')">✕</button></td>'+
     '</tr>';
@@ -280,11 +339,14 @@ function renderVFLines(){
     '<th class="c" style="width:36px">#</th><th>Sản phẩm</th><th class="c">ĐVT</th>'+
     (needSt?'<th class="r">Tồn tại kho</th>':'')+
     '<th class="r">Số lượng</th>'+
-    (hasPrice?'<th class="r">Đơn giá (đ)</th><th class="r">Thành tiền (đ)</th>':'')+
+    (hasPrice?'<th class="r">Đơn giá (đ)</th>':'')+
+    (showCost?'<th class="r">Giá vốn hàng trả (đ)</th>':'')+
+    (hasPrice?'<th class="r">Thành tiền (đ)</th>':'')+
     '<th class="c" style="width:50px"></th>'+
     '</tr></thead><tbody>'+rows+'</tbody>'+
-    (hasPrice?'<tfoot><tr><td colspan="'+(needSt?6:5)+'" class="r">TỔNG CỘNG</td><td class="r" id="vf-total" style="font-size:15px;color:var(--primary)">'+fmtMoney(total)+'</td><td></td></tr></tfoot>':'')+
-    '</table></div>';
+    (hasPrice?'<tfoot><tr><td colspan="'+((needSt?6:5)+(showCost?1:0))+'" class="r">TỔNG CỘNG</td><td class="r" id="vf-total" style="font-size:15px;color:var(--primary)">'+fmtMoney(total)+'</td><td></td></tr></tfoot>':'')+
+    '</table></div>'+
+    (showCost?'<div class="small muted" style="margin-top:8px">💡 Cột "Giá vốn hàng trả": để trống sẽ dùng giá vốn bình quân hiện tại; nhập tay khi biết giá vốn gốc của lần bán để báo cáo lợi nhuận chính xác.</div>':'');
   vfUpdateDebt(total);
 }
 function saveVoucher(doPrint){
@@ -323,6 +385,7 @@ function voucherDetail(id){
       '<td class="r '+(isAdj?(l.qty>=0?'num-pos':'num-neg'):'')+'">'+(isAdj&&l.qty>0?'+':'')+fmtQty(l.qty)+'</td>'+
       (hasPrice?'<td class="r">'+fmtMoney(l.price)+'</td><td class="r"><b>'+fmtMoney(l.qty*l.price)+'</b></td>':'')+
       (v.type==='out'?'<td class="r muted">'+fmtMoney(l.cost)+'</td><td class="r '+((l.price-l.cost)>=0?'num-pos':'num-neg')+'">'+fmtMoney((l.price-l.cost)*l.qty)+'</td>':'')+
+      (v.type==='return_cus'?'<td class="r muted">'+fmtMoney(l.cost)+(l.costManual?' <span class="tag" title="Giá vốn nhập tay">✍️</span>':'')+'</td>':'')+
     '</tr>';
   }).join('');
   var info=
@@ -356,6 +419,7 @@ function voucherDetail(id){
       '<th class="c">#</th><th>Sản phẩm</th><th class="c">ĐVT</th><th class="r">'+(isAdj?'Chênh lệch':'Số lượng')+'</th>'+
       (hasPrice?'<th class="r">Đơn giá</th><th class="r">Thành tiền</th>':'')+
       (v.type==='out'?'<th class="r">Giá vốn</th><th class="r">Lợi nhuận</th>':'')+
+      (v.type==='return_cus'?'<th class="r">Giá vốn hàng trả</th>':'')+
       '</tr></thead><tbody>'+rows+'</tbody>'+
       (hasPrice?'<tfoot><tr><td colspan="4" class="r">TỔNG CỘNG</td><td></td><td class="r" style="color:var(--primary)">'+fmtMoney(v.total)+'</td>'+(v.type==='out'?'<td></td><td class="r '+(profit>=0?'num-pos':'num-neg')+'">'+fmtMoney(profit)+'</td>':'')+'</tr></tfoot>':'')+
       '</table></div>'+payHTML,
@@ -442,7 +506,9 @@ var ST={whId:null, counts:{}, q:'', onlyStock:true};
 RENDERERS.stocktake=function(c){
   var whs=activeWarehouses();
   if(!whs.length){ c.innerHTML='<div class="card"><div class="empty">Chưa có kho nào — hãy tạo kho trước khi kiểm kê</div></div>'; return; }
-  if(!ST.whId || !whById(ST.whId)) ST.whId=whs[0].id;
+  if(!ST.whId || !whById(ST.whId)){
+    ST.whId=(SESSION && SESSION.defaultWarehouseId && whs.some(function(w){return w.id===SESSION.defaultWarehouseId;}))?SESSION.defaultWarehouseId:whs[0].id;
+  }
   c.innerHTML=
   '<div class="card" style="padding:12px 16px;font-size:13px">📋 <b>Kiểm kê kho:</b> nhập số lượng <b>thực đếm</b> cho các mặt hàng có chênh lệch so với sổ sách, sau đó bấm <b>Tạo phiếu điều chỉnh</b>. Tồn kho sẽ được điều chỉnh đúng bằng số thực đếm, có lưu vết đầy đủ.</div>'+
   '<div class="toolbar">'+
@@ -469,7 +535,7 @@ function stRows(){
     if(q && normStr(p.name).indexOf(q)<0 && normStr(p.sku).indexOf(q)<0 && normStr(p.brand).indexOf(q)<0) return false;
     return true;
   }).sort(function(a,b){return a.sku.localeCompare(b.sku,'vi');}).slice(0,400);
-  var html=list.map(function(p){
+  var html=list.map(function(p,idx){
     var book=getStock(ST.whId,p.id);
     var entered=ST.counts[p.id];
     var actual=entered===undefined?book:parseNum(entered);
@@ -477,7 +543,7 @@ function stRows(){
     return '<tr>'+
       '<td><b>'+esc(p.sku)+'</b></td><td>'+esc(p.name)+'</td><td class="c">'+esc(p.unit)+'</td>'+
       '<td class="r">'+fmtQty(book)+'</td>'+
-      '<td><input type="number" step="any" min="0" style="text-align:right" value="'+(entered===undefined?book:entered)+'" oninput="stSetCount(\''+p.id+'\',this.value)"></td>'+
+      '<td><input type="number" step="any" min="0" id="st-in-'+idx+'" style="text-align:right" value="'+(entered===undefined?book:entered)+'" oninput="stSetCount(\''+p.id+'\',this.value,this)" onkeydown="stEnterNext(event,'+idx+')"></td>'+
       '<td class="r" id="st-delta-'+p.id+'">'+stDeltaHTML(delta)+'</td>'+
     '</tr>';
   }).join('');
@@ -488,8 +554,16 @@ function stDeltaHTML(delta){
   if(Math.abs(delta)<1e-9) return '<span class="muted">0</span>';
   return '<b class="'+(delta>0?'num-pos':'num-neg')+'">'+(delta>0?'+':'')+fmtQty(delta)+'</b>';
 }
-function stSetCount(pid,val){
+/* Enter trong ô thực đếm → nhảy sang ô kế tiếp (kiểm kê hàng loạt không cần chuột) */
+function stEnterNext(e, idx){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  var nx=$('#st-in-'+(idx+1));
+  if(nx){ nx.focus(); if(nx.select) nx.select(); }
+}
+function stSetCount(pid,val,el){
   var book=getStock(ST.whId,pid);
+  if(String(val).trim()!=='' && parseNum(val)<0){ val=0; if(el) el.value=0; }
   if(String(val).trim()===''){ delete ST.counts[pid]; }
   else {
     ST.counts[pid]=val;

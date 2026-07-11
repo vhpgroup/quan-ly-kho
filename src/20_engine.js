@@ -21,9 +21,14 @@ function stockValueTotal(){
   return v;
 }
 function nextCode(type){
-  var c=DB.counters[type]||1;
-  DB.counters[type]=c+1;
-  return VTYPES[type].code + String(c).padStart(5,'0');
+  // Chống trùng mã: kể cả khi DB.counters bị mất/hỏng, dò tiếp cho tới mã chưa tồn tại
+  var c=DB.counters[type]||1, code;
+  do{
+    code=VTYPES[type].code + String(c).padStart(5,'0');
+    c++;
+  }while(DB.vouchers.some(function(v){return v.code===code;}));
+  DB.counters[type]=c;
+  return code;
 }
 /* Phiếu có giá trị tiền với đối tác (tham gia công nợ) */
 function isMoneyVoucher(t){ return t==='in'||t==='out'||t==='return_sup'||t==='return_cus'; }
@@ -51,6 +56,15 @@ function validateVoucherInput(inp){
   });
   if(!lines.length) return {ok:false, error:'Phiếu phải có ít nhất một dòng hàng với số lượng hợp lệ'};
 
+  // Chặn đơn giá / giá vốn âm — giá âm phá giá vốn bình quân và mọi báo cáo phía sau
+  for(var li=0; li<lines.length; li++){
+    var lneg=lines[li];
+    if(parseNum(lneg.price)<0 || (lneg.costManual!==undefined && String(lneg.costManual)!=='' && parseNum(lneg.costManual)<0)){
+      var pneg=prodById(lneg.productId);
+      return {ok:false, error:'Đơn giá / giá vốn âm không hợp lệ ở dòng "'+(pneg?pneg.name:'?')+'"'};
+    }
+  }
+
   // Kiểm tra tồn cho các luồng xuất
   var need={};
   lines.forEach(function(l){
@@ -77,6 +91,7 @@ function applyVoucherLines(v, lines){
     var qty=round3(+l.qty);
     var price=round2(parseNum(l.price));
     var cost=round2(p.costPrice||0);
+    var manualCost=false;
 
     if(t==='in'){
       var tq=totalStock(p.id);
@@ -95,11 +110,19 @@ function applyVoucherLines(v, lines){
       if(!price) price=cost;
     } else if(t==='return_cus'){
       addStock(v.warehouseId, p.id, qty);
+      // Giá vốn hàng khách trả: mặc định là giá vốn bình quân hiện tại; Quản lý/Quản trị
+      // có thể nhập tay giá vốn gốc của lần bán để lợi nhuận không bị méo (đồng thuận hội đồng soát xét)
+      if(l.costManual!==undefined && String(l.costManual)!==''){
+        var mc=parseNum(l.costManual);
+        if(mc>=0){ cost=round2(mc); manualCost=true; }
+      }
     } else if(t==='adjust'){
       addStock(v.warehouseId, p.id, qty); // qty là chênh lệch +/-
       price=cost;
     }
-    v.lines.push({ productId:p.id, sku:p.sku, name:p.name, unit:p.unit, qty:qty, price:price, cost:cost });
+    var line={ productId:p.id, sku:p.sku, name:p.name, unit:p.unit, qty:qty, price:price, cost:cost };
+    if(manualCost) line.costManual=true;
+    v.lines.push(line);
     v.total=round2(v.total + qty*price);
   });
 }
@@ -223,6 +246,61 @@ function deleteVoucher(id){
   return {ok:true};
 }
 
+/* ---------- Tính lại giá vốn toàn bộ (replay theo trình tự thời gian) ----------
+ Dùng khi giá vốn bị lệch do sửa/hủy/xóa phiếu nhập trong quá khứ (BQGQ vốn không hồi tố).
+ Chỉ tính lại CHIỀU GIÁ TRỊ: costPrice sản phẩm + cost từng dòng phiếu (+ price/total của
+ phiếu kiểm kê vì giá trị điều chỉnh tính theo giá vốn). KHÔNG đụng số lượng tồn kho.
+ Giá vốn nhập tay trên phiếu khách trả (costManual) được tôn trọng, không ghi đè. */
+function recostAll(){
+  var vs=DB.vouchers.filter(function(v){return v.status!=='void';}).slice().sort(function(a,b){
+    if(a.date!==b.date) return a.date<b.date?-1:1;
+    return String(a.createdAt||'')<String(b.createdAt||'')?-1:1;
+  });
+  var sim={}; // pid -> {qty, cost} — trạng thái BQGQ toàn công ty mô phỏng theo dòng thời gian
+  function st(pid){ return sim[pid]||(sim[pid]={qty:0, cost:0}); }
+  var changedLines=0, changedProducts=0;
+  vs.forEach(function(v){
+    var newTotal=0;
+    v.lines.forEach(function(l){
+      var s=st(l.productId);
+      var c=round2(s.cost);
+      if(v.type==='in'){
+        var nq=round3(s.qty+l.qty);
+        s.cost = nq>0 ? round2(((s.qty*s.cost)+l.qty*l.price)/nq) : round2(l.price);
+        s.qty=nq;
+        if(l.cost!==s.cost){ l.cost=s.cost; changedLines++; }
+      } else if(v.type==='out'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty-l.qty);
+      } else if(v.type==='transfer'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+      } else if(v.type==='return_sup'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty-l.qty);
+      } else if(v.type==='return_cus'){
+        if(!l.costManual && l.cost!==c){ l.cost=c; changedLines++; }
+        s.qty=round3(s.qty+l.qty);
+      } else if(v.type==='adjust'){
+        if(l.cost!==c){ l.cost=c; changedLines++; }
+        if(l.price!==c) l.price=c; // giá trị điều chỉnh kiểm kê tính theo giá vốn
+        s.qty=round3(s.qty+l.qty);
+      }
+      newTotal=round2(newTotal + l.qty*(l.price||0));
+    });
+    if(v.type==='adjust' && v.total!==newTotal) v.total=newTotal;
+  });
+  DB.products.forEach(function(p){
+    var s=sim[p.id];
+    if(s){
+      var nc=round2(s.cost);
+      if(p.costPrice!==nc){ p.costPrice=nc; changedProducts++; }
+    }
+  });
+  audit('Tính lại giá vốn toàn bộ', 'Cập nhật '+changedProducts+' sản phẩm, '+changedLines+' dòng phiếu (replay '+vs.length+' phiếu theo trình tự thời gian)');
+  saveDB();
+  return {ok:true, changedProducts:changedProducts, changedLines:changedLines, replayed:vs.length};
+}
+
 /* ==================== CÔNG NỢ & PHIẾU THU / CHI ====================
  Quy ước dấu (theo góc nhìn CỦA TA):
  - NCC   (phải trả): nhập +(total−paid) · trả hàng NCC −(total−paid) · phiếu chi −amount · phiếu thu +amount
@@ -231,9 +309,13 @@ function deleteVoucher(id){
  Phiếu đã hủy (status='void') không tính. paid trên phiếu trả hàng = tiền đã hoàn ngay khi trả. */
 function nextPayCode(type){
   var key='pay_'+type;
-  var c=DB.counters[key]||1;
-  DB.counters[key]=c+1;
-  return PTYPES[type].code + String(c).padStart(5,'0');
+  var c=DB.counters[key]||1, code;
+  do{
+    code=PTYPES[type].code + String(c).padStart(5,'0');
+    c++;
+  }while(DB.payments.some(function(p){return p.code===code;}));
+  DB.counters[key]=c;
+  return code;
 }
 function voucherDebtDelta(v){
   if(v.status==='void' || !v.partnerId || !isMoneyVoucher(v.type)) return 0;
