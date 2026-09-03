@@ -1,4 +1,4 @@
-name: Build web app
+name: Desktop build
 
 on:
   push:
@@ -41,25 +41,25 @@ jobs:
       - name: Test engine
         run: node test_engine.js
 
-      - name: Build web app tu src
-        run: python build.py 
+      - name: Build web app from source
+        run: python build.py
 
-      - name: Cai dependency desktop
+      - name: Install desktop dependencies
         working-directory: desktop
         run: npm install
 
-      - name: Dong goi Electron
+      - name: Package Electron app
         working-directory: desktop
         run: npm run ${{ matrix.script }}
 
-      - name: Tai artifact len
+      - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
           name: QuanLyKho-${{ matrix.os }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
-      - name: Dinh kem vao Release (khi push tag)
+      - name: Attach installers to release (tag only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
