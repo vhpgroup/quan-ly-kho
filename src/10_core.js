@@ -138,6 +138,7 @@ var DB=null;
 var SESSION=null;
 var storageOK=true;
 var DB_KEY='qlk_data_v1';
+var _dbChangeTimer=null;
 
 function storageAvailable(){
   try{ localStorage.setItem('__qlk_test','1'); localStorage.removeItem('__qlk_test'); return true; }
@@ -156,11 +157,21 @@ function loadDB(){
 function saveDB(){
   if(!DB) return;
   DB.meta.updatedAt=nowISO();
-  if(!storageOK) return;
-  try{ localStorage.setItem(DB_KEY, JSON.stringify(DB)); }
+  if(!storageOK){ emitDBChanged('local'); return; }
+  try{ localStorage.setItem(DB_KEY, JSON.stringify(DB)); emitDBChanged('local'); }
   catch(e){
     if(typeof toast==='function') toast('Không lưu được dữ liệu: '+e.message,'error');
   }
+}
+function emitDBChanged(source){
+  if(typeof handleDBChanged!=='function') return;
+  if(source==='external'){ handleDBChanged(source); return; }
+  if(typeof setTimeout!=='function'){ handleDBChanged(source||'local'); return; }
+  if(_dbChangeTimer) clearTimeout(_dbChangeTimer);
+  _dbChangeTimer=setTimeout(function(){
+    _dbChangeTimer=null;
+    handleDBChanged(source||'local');
+  }, 0);
 }
 function defaultDB(){
   return migrateDB({

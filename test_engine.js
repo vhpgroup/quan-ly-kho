@@ -12,6 +12,8 @@ global.localStorage={
 global.sessionStorage={setItem(){},getItem(){return null;},removeItem(){}};
 global.document={addEventListener(){}, querySelector(){return null;}, querySelectorAll(){return [];}, createElement(){return {style:{},classList:{add(){},remove(){}},setAttribute(){},click(){},remove(){}};}, body:{appendChild(){}}};
 global.window=global;
+const _listeners={};
+global.addEventListener=(type, cb)=>{ _listeners[type]=cb; };
 
 let failures=0, passes=0;
 function check(name, cond, extra){
@@ -238,5 +240,50 @@ check('seed: dashStats khớp tính tay', Math.abs(dst.stockValue-expectVal)<1);
 // serialize không lỗi
 check('DB serialize được', JSON.stringify(DB).length>1000);
 
-console.log('\n===== KẾT QUẢ: '+passes+' đạt, '+failures+' lỗi =====');
+// ================== 6. Realtime sync ==================
+const fakeNodes={};
+function fakeEl(hidden){
+  return {
+    textContent:'',
+    innerHTML:'',
+    scrollTop:0,
+    classList:{
+      contains(c){ return c==='hidden' ? !!hidden : false; },
+      add(){},
+      remove(){},
+      toggle(){}
+    }
+  };
+}
+['#app','#user-name','#user-role','#user-avatar','#brand-company','#login-company','#nav','#page-title','#content'].forEach(sel=>{ fakeNodes[sel]=fakeEl(false); });
+global.document.querySelector=(sel)=>fakeNodes[sel]||null;
+global.document.querySelectorAll=()=>[];
+let refreshCount=0, navCount=0, toastCount=0;
+refreshPage=function(){ refreshCount++; };
+buildNav=function(){ navCount++; };
+toast=function(){ toastCount++; };
+DB=defaultDB();
+SESSION=DB.users[0];
+CURRENT_PAGE='dashboard';
+handleDBChanged('external');
+check('realtime: handleDBChanged refresh trang dang mo', refreshCount===1 && navCount===1, {refreshCount,navCount});
+
+refreshCount=0; navCount=0;
+const oldSetTimeout=global.setTimeout, oldClearTimeout=global.clearTimeout;
+global.setTimeout=(fn)=>{ fn(); return 1; };
+global.clearTimeout=()=>{};
+saveDB();
+global.setTimeout=oldSetTimeout;
+global.clearTimeout=oldClearTimeout;
+check('realtime: saveDB tu phat refresh khong can reload', refreshCount===1 && navCount===1, {refreshCount,navCount});
+
+refreshCount=0; navCount=0;
+const synced=defaultDB();
+synced.users[0].id=SESSION.id;
+synced.products.push({id:'rt1',sku:'RT1',name:'Realtime 1',unit:'cai',costPrice:0,salePrice:0,minStock:0,active:true});
+if(_listeners.storage) _listeners.storage({key:DB_KEY, oldValue:'old', newValue:JSON.stringify(synced)});
+check('realtime: storage event nap DB moi', DB.products.some(p=>p.id==='rt1'), DB.products.map(p=>p.id));
+check('realtime: storage event refresh UI', refreshCount===1 && navCount===1, {refreshCount,navCount});
+
+console.log('\n===== KET QUA SAU REALTIME: '+passes+' dat, '+failures+' loi =====');
 process.exit(failures?1:0);

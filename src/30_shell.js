@@ -91,6 +91,51 @@ function showPage(id, arg){
 }
 function refreshPage(){ showPage(CURRENT_PAGE); }
 
+function updateSessionUI(){
+  if(!SESSION) return;
+  var name=SESSION.fullName||SESSION.username;
+  $('#user-name').textContent=name;
+  $('#user-role').textContent=ROLES[SESSION.role]||SESSION.role;
+  $('#user-avatar').textContent=name.trim().charAt(0).toUpperCase();
+}
+function appIsVisible(){
+  var app=$('#app');
+  return !!(app && !app.classList.contains('hidden'));
+}
+function handleDBChanged(source){
+  if(!DB) return;
+  applySettingsUI();
+  if(!SESSION || !appIsVisible()) return;
+  var fresh=DB.users.find(function(x){ return x.id===SESSION.id; });
+  if(!fresh || fresh.active===false){
+    doLogout(source==='external'?'Dữ liệu người dùng đã thay đổi — vui lòng đăng nhập lại.':'');
+    return;
+  }
+  SESSION=fresh;
+  updateSessionUI();
+  buildNav();
+  if(source==='external' && VF) {
+    if(typeof toast==='function') toast('Dữ liệu đã được cập nhật ở cửa sổ khác. Hoàn tất phiếu đang nhập rồi mở lại trang để xem số liệu mới.','warn');
+    return;
+  }
+  if(!can(CURRENT_PAGE)) showPage('dashboard');
+  else refreshPage();
+}
+if(typeof window!=='undefined' && window.addEventListener){
+  window.addEventListener('storage', function(e){
+    if(e.key!==DB_KEY || !e.newValue || e.newValue===e.oldValue) return;
+    try{
+      var next=JSON.parse(e.newValue);
+      if(!next || !next.users || !next.products) return;
+      DB=migrateDB(next);
+      emitDBChanged('external');
+      if(SESSION && appIsVisible() && typeof toast==='function') toast('Dữ liệu đã được cập nhật tự động','info');
+    }catch(err){
+      if(typeof toast==='function') toast('Không đọc được dữ liệu mới: '+err.message,'error');
+    }
+  });
+}
+
 /* ---------- Menu người dùng ---------- */
 function toggleUserMenu(e){
   e.stopPropagation();
@@ -135,10 +180,7 @@ function doLogout(msg){
 function enterApp(){
   $('#login-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  var name=SESSION.fullName||SESSION.username;
-  $('#user-name').textContent=name;
-  $('#user-role').textContent=ROLES[SESSION.role]||SESSION.role;
-  $('#user-avatar').textContent=name.trim().charAt(0).toUpperCase();
+  updateSessionUI();
   buildNav();
   showPage('dashboard');
 }
@@ -166,8 +208,10 @@ function doChangePass(){
 /* ---------- Cập nhật tên công ty trên giao diện ---------- */
 function applySettingsUI(){
   var name=(DB.settings.companyName||'').trim();
-  $('#brand-company').textContent=name||'Nội bộ';
-  $('#login-company').textContent=name||'Phần mềm quản lý kho nội bộ';
+  var brand=$('#brand-company');
+  var login=$('#login-company');
+  if(brand) brand.textContent=name||'Nội bộ';
+  if(login) login.textContent=name||'Phần mềm quản lý kho nội bộ';
 }
 
 /* ---------- Khởi động ---------- */
